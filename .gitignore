@@ -1,0 +1,43 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Cargo lock -- included for binaries, excluded for libraries
+# This is a workspace with both, so we include it
+# (uncomment to exclude: Cargo.lock)
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ANTLR4 tool (downloaded binary, not source)
+tools/*.jar
+
+# ANTLR4 generated parser code (regenerate from .g4 grammars)
+# These are 130K+ lines of machine-generated Rust -- not hand-maintained.
+# Regenerate with: scripts/generate_parsers.sh
+crates/nexflow-parser/src/generated/
+
+# Generated output (from codegen runs)
+/output/
+/generated/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Coverage and profiling
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.html
+coverage/
