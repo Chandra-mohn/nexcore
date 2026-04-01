@@ -1,0 +1,90 @@
+// Nexflow SchemaDSL Example: Error Response Types (v2 syntax)
+// Referenced by: account-api.api, catalog-api.api, notification-api.api
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+// ----------------------------------------------------------------------------
+// Common Error Types
+// ----------------------------------------------------------------------------
+
+schema validation_error
+    pattern response
+
+    version 1.0.0
+
+    fields
+        error_code string required
+        message string required
+        field_errors list(string) optional
+        error_time date required
+    end
+end
+
+// ----------------------------------------------------------------------------
+// Account Errors
+// ----------------------------------------------------------------------------
+
+schema account_not_found
+    pattern response
+
+    version 1.0.0
+
+    fields
+        error_code string required default("ACCOUNT_NOT_FOUND")
+        message string required
+        account_id string optional
+        error_time date required
+    end
+end
+
+schema insufficient_permission
+    pattern response
+
+    version 1.0.0
+
+    fields
+        error_code string required default("INSUFFICIENT_PERMISSION")
+        message string required
+        required_scope string optional
+        error_time date required
+    end
+end
+
+schema account_already_exists
+    pattern response
+
+    version 1.0.0
+
+    fields
+        error_code string required default("ACCOUNT_ALREADY_EXISTS")
+        message string required
+        existing_account_id string optional
+        error_time date required
+    end
+end
+
+schema account_has_balance
+    pattern response
+
+    version 1.0.0
+
+    fields
+        error_code string required default("ACCOUNT_HAS_BALANCE")
+        message string required
+        remaining_balance decimal(14, 2) optional
+        error_time date required
+    end
+end
+
+schema insufficient_funds
+    pattern response
+
+    version 1.0.0
+
+    fields
+        error_code string required default("INSUFFICIENT_FUNDS")
+        message string required
+        available_balance decimal(14, 2) optional
+        requested_amount decimal(14, 2) optional
+        error_time date required
+    end
+end

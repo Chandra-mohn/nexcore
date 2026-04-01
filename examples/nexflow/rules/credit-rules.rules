@@ -1,0 +1,71 @@
+// Nexflow RulesDSL Example: Credit Decision Rules
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+// Decision table for credit scoring
+decision_table credit_scoring
+    hit_policy first_match
+    description "Determine credit score tier from income and history"
+    version: 1.0.0
+
+    given:
+        income: number
+        credit_history: text
+        existing_debt: number
+
+    decide:
+        | income       | credit_history | existing_debt | tier     | limit    |
+        | ==== |
+        | >= 100000    | "excellent"    | < 10000       | "gold"   | 50000    |
+        | >= 50000     | "good"         | < 20000       | "silver" | 25000    |
+        | >= 30000     | "fair"         | < 30000       | "bronze" | 10000    |
+        | *            | "poor"         | *             | "denied" | 0        |
+        | *            | *              | >= 50000      | "denied" | 0        |
+        | *            | *              | *             | "review" | 5000     |
+
+    return:
+        tier: text
+        limit: number
+end
+
+// Procedural rule for transfer validation
+rule transfer_validation:
+    description "Validate fund transfer request"
+
+    if amount > 0 and amount <= account_balance then
+        if amount > 10000 then
+            set requires_approval = true
+        else
+            set requires_approval = false
+        endif
+        set valid = true
+    elseif amount <= 0 then
+        set valid = false
+        set error_message = "Amount must be positive"
+    else
+        set valid = false
+        set error_message = "Insufficient funds"
+    endif
+end
+
+// Decision table with multi-hit policy
+decision_table fee_calculation
+    hit_policy multi_hit
+    description "Calculate applicable fees"
+
+    given:
+        account_type: text
+        transaction_amount: number
+        is_international: boolean
+
+    decide:
+        | account_type | transaction_amount | is_international | fee_type      | fee_amount |
+        | ==== |
+        | "basic"      | *                  | *                | "monthly"     | 9.99       |
+        | *            | >= 10000           | *                | "large_tx"    | 25.00      |
+        | *            | *                  | true             | "forex"       | 15.00      |
+        | "premium"    | *                  | *                | "premium_fee" | 0          |
+
+    return:
+        fee_type: text
+        fee_amount: number
+end

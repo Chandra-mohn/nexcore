@@ -1,0 +1,157 @@
+// Nexflow ServiceDSL Example: Mobile BFF (Backend-for-Frontend)
+// Demonstrates: BFF aggregation, parallel fan-out, fallbacks, config block, cfg. indirection
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./apis/mobile-bff-api.api
+import ./apis/account-api.api
+import ./apis/order-api.api
+import ./apis/catalog-api.api
+import ./apis/notification-api.api
+import ./transforms/dashboard-assembly.xform
+import ./transforms/profile-assembly.xform
+import ./rules/mobile-transfer-validation.rules
+import ./rules/biometric-validation.rules
+
+service MobileBffService
+    description "Mobile app backend -- aggregates multiple services into mobile-friendly responses"
+
+    implements MobileBffAPI
+    consumes AccountAPI, OrderAPI, CatalogAPI, NotificationAPI
+
+    config
+        // Observability
+        tracing_provider "opentelemetry"
+        tracing_service_name "mobile-bff"
+        metrics_provider "prometheus"
+        metrics_namespace "mobile_bff"
+        logging_correlation_header "X-Request-ID"
+
+        // Aggressive caching for mobile (reduce round trips)
+        dashboard_cache_ttl 30
+        profile_cache_ttl 120
+
+        // Service call timeouts (tight for mobile UX)
+        account_timeout 3
+        order_timeout 3
+        catalog_timeout 3
+        notification_timeout 3
+    end
+
+    // ---------------------------------------------------------------
+    // Dashboard (parallel fan-out to 4 services)
+    // ---------------------------------------------------------------
+
+    handler getDashboard
+        authorize scope "mobile:read"
+
+        parallel
+            call AccountAPI.getBalance into balance
+            call OrderAPI.listOrders with status = "active" into active_orders
+            call CatalogAPI.listProducts with sort_by = "trending" into trending
+            call NotificationAPI.listDeliveries with status = "unread" into notifications
+        end
+
+        on_error
+            // Partial failure is OK for dashboard -- use defaults
+            fallback balance to default_balance
+            fallback notifications to empty_list
+        end
+
+        transform using DashboardAssembly.xform into response
+    end
+
+    // ---------------------------------------------------------------
+    // Profile (aggregated view)
+    // ---------------------------------------------------------------
+
+    handler getProfile
+        authorize scope "mobile:read"
+
+        parallel
+            call AccountAPI.getAccount into account
+            call OrderAPI.listOrders with status = "all" into order_history
+        end
+
+        on_error
+            404 when account is null
+        end
+
+        transform using ProfileAssembly.xform into response
+    end
+
+    // ---------------------------------------------------------------
+    // Quick Actions (thin wrappers with mobile-specific validation)
+    // ---------------------------------------------------------------
+
+    handler quickTransfer
+        authorize scope "mobile:transfer"
+        validate request using MobileTransferValidation.rules
+
+        // Mobile-specific: check biometric auth token
+        validate request.biometric_token using BiometricValidation.rules
+
+        call AccountAPI.transferFunds
+            with source_account_id = request.from
+            with target_account_id = request.to
+            with amount = request.amount
+            into transfer_result
+        end
+
+        on_error
+            422 when transfer_result.status = "insufficient_funds"
+            403 when transfer_result.status = "blocked"
+        end
+
+        respond 200
+    end
+
+    handler reorderPrevious
+        authorize scope "mobile:write"
+
+        // Look up the previous order, then place a new one with same items
+        call OrderAPI.getOrder with order_id = request.previous_order_id into previous
+
+        on_error
+            404 when previous is null
+        end
+
+        // Check current availability
+        parallel
+            call CatalogAPI.getProduct with product_id = item.product_id
+                for each item in previous.items
+                into availability
+            end
+        end
+
+        transform previous, availability using ReorderAssembly.xform into new_order
+        call OrderAPI.placeOrder with request = new_order into result
+
+        on_error
+            422 when result.status = "unavailable"
+        end
+
+        respond 201
+    end
+
+    // ---------------------------------------------------------------
+    // Cache
+    // ---------------------------------------------------------------
+
+    cache
+        getDashboard ttl cfg.dashboard_cache_ttl seconds
+        getProfile ttl cfg.profile_cache_ttl seconds
+    end
+
+    // ---------------------------------------------------------------
+    // Health
+    // ---------------------------------------------------------------
+
+    health "/health"
+        check service AccountAPI timeout cfg.account_timeout seconds
+        check service OrderAPI timeout cfg.order_timeout seconds
+        check service CatalogAPI timeout cfg.catalog_timeout seconds
+        check service NotificationAPI timeout cfg.notification_timeout seconds
+    end
+
+    ready "/ready"
+end

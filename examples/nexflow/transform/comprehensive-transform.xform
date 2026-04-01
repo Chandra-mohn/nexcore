@@ -1,0 +1,228 @@
+// Nexflow TransformDSL: Comprehensive Example
+// Exercises ALL grammar features for integration testing
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./account.schema
+
+// Transform with qualifiers on fields
+transform validate_account_input
+    version: 1.0.0
+    description: "Validate and normalize account input fields"
+    pure: true
+    idempotent: true
+
+    input
+        account_name: string, required
+        account_number: string, required
+        balance: decimal, required
+        currency: string, nullable, default: "USD"
+    end
+
+    output
+        validated_name: string
+        validated_number: string
+        validated_balance: decimal
+        validated_currency: string
+    end
+
+    validate_input
+        account_name is not null : "Account name is required"
+        balance >= 0 : "Balance cannot be negative"
+    end
+
+    apply
+        validated_name = uppercase(trim(account_name))
+        validated_number = account_number
+        validated_balance = round(balance, 2)
+        validated_currency = when currency is null : "USD" otherwise : uppercase(currency)
+    end
+
+    validate_output
+        validated_name is not null : "Validated name must not be null"
+    end
+end
+
+// Transform with collection types
+transform aggregate_transactions
+    version: 1.0.0
+    description: "Aggregate transaction list into summary"
+    pure: true
+
+    input
+        transactions: list<transaction_event>
+    end
+
+    output
+        total: decimal
+        item_count: integer
+    end
+
+    apply
+        total = sum(transactions, amount)
+        item_count = length(transactions)
+    end
+end
+
+// Transform with lookups, state, and error handling
+transform enrich_with_exchange_rate
+    version: 1.0.0
+    description: "Convert amount using exchange rate lookup"
+    pure: false
+
+    input
+        amount: decimal
+        from_currency: string
+        to_currency: string
+    end
+
+    lookup: exchange_rates
+
+    lookups:
+        rate_history: historical_rates
+        fallback_rates: default_rates
+    end
+
+    state: conversion_cache
+
+    output: decimal
+
+    apply
+        let rate = lookup(exchange_rates, from_currency, to_currency)
+        output = amount * rate
+    end
+
+    on_error
+        action: use_default
+        default: 0
+        log_level: warning
+        error_code: "EXCHANGE_RATE_UNAVAILABLE"
+    end
+end
+
+// Transform with params and defaults
+transform apply_discount
+    version: 1.0.0
+    pure: true
+
+    input: decimal
+
+    params:
+        discount_rate: decimal required default: 0.10
+        min_amount: decimal optional default: 100.00
+        max_discount: decimal required
+    end
+
+    output: decimal
+
+    apply
+        output = when input >= min_amount : input * (1 - discount_rate) otherwise : input
+    end
+end
+
+// Transform with cache
+transform cached_lookup
+    version: 1.0.0
+    pure: true
+
+    cache
+        ttl: 300 seconds
+        key: [input.account_id, input.currency]
+    end
+
+    input
+        account_id: string
+        currency: string
+    end
+
+    output: decimal
+
+    apply
+        output = lookup(rates, account_id, currency)
+    end
+end
+
+// Transform block with compose (sequential) + use + validate + invariant
+transform_block process_order
+    version: 1.0.0
+
+    use validate_order normalize_amounts end
+
+    input
+        order: order_request
+    end
+
+    output
+        processed: processed_order
+    end
+
+    validate_input
+        order is not null : "Order is required"
+    end
+
+    invariant
+        processed.total >= 0 : "Total cannot be negative"
+    end
+
+    compose sequential
+        validate_order
+        normalize_amounts
+        calculate_totals
+    end
+
+    validate_output
+        processed is not null : "Output must not be null"
+    end
+
+    on_error
+        action: reject
+        log_level: error
+        error_code: "ORDER_PROCESSING_FAILED"
+    end
+end
+
+// Transform block with mappings and on_change
+transform_block map_account_fields
+    version: 1.0.0
+
+    input
+        source: account_detail
+    end
+
+    output
+        target: account_summary
+    end
+
+    mappings
+        target.account_id = source.account_id
+        target.holder_name = uppercase(source.holder_name)
+        target.balance = source.balance
+        target.currency = source.currency
+        target.status = source.status
+    end
+
+    on_change [source.balance, source.status]
+        recalculate
+            target.balance = source.balance
+            target.status = source.status
+        end
+    end
+end
+
+// Transform block with conditional compose and then
+transform_block route_by_type
+    version: 1.0.0
+
+    input
+        record: transaction_event
+    end
+
+    output
+        result: processed_transaction
+    end
+
+    compose conditional
+        when record.type == "credit" : process_credit
+        when record.type == "debit" : process_debit
+        otherwise : process_default
+    end
+end

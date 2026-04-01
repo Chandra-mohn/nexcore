@@ -1,0 +1,27 @@
+[package]
+name = "nexflow-cli"
+description = "CLI tool for Nexflow DSL: parse, validate, and generate Rust/Axum services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "nexflow"
+path = "src/main.rs"
+
+[dependencies]
+nexflow-parser = { path = "../nexflow-parser" }
+nexflow-codegen = { path = "../nexflow-codegen" }
+nexflow-compiler = { path = "../nexflow-compiler" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+miette = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

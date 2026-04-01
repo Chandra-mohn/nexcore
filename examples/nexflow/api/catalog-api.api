@@ -1,0 +1,168 @@
+// Nexflow ApiDSL Example: Product Catalog (Greenfield)
+// Demonstrates: read-heavy API, caching, search, offset pagination, cfg. indirection
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./schemas/catalog.schema
+import ./schemas/errors.schema
+
+api CatalogAPI
+    version "1.0"
+    base "/api/v1/catalog"
+    description "Product catalog -- browse, search, and category management"
+
+    targets rest, graphql
+
+    auth default api_key header "X-API-Key"
+    content_type json
+    rate_limit cfg.default_rate_limit per minute burst cfg.default_burst
+    pagination offset default_size 25 max_size 100
+
+    config
+        default_rate_limit 5000
+        default_burst 200
+        search_timeout 10
+        product_cache_ttl 120
+        category_cache_ttl 600
+    end
+
+    // ---------------------------------------------------------------
+    // Product Endpoints
+    // ---------------------------------------------------------------
+
+    endpoint listProducts
+        method GET
+        path "/products"
+        query
+            category_id string optional
+            brand string optional
+            min_price decimal optional
+            max_price decimal optional
+            sort_by string optional default "relevance"
+            in_stock boolean optional default true
+        end
+        response paginated ProductSummary
+        cache 300 seconds
+    end
+
+    endpoint getProduct
+        method GET
+        path "/products/{product_id}"
+        params
+            product_id string required
+        end
+        response ProductDetail
+        errors
+            404 using ProductNotFound
+        end
+        cache cfg.product_cache_ttl seconds
+    end
+
+    endpoint searchProducts
+        method GET
+        path "/products/search"
+        query
+            q string required
+            category_id string optional
+            facets boolean optional default true
+        end
+        response SearchResult
+        cache 60 seconds
+        timeout cfg.search_timeout seconds
+    end
+
+    // ---------------------------------------------------------------
+    // Category Endpoints
+    // ---------------------------------------------------------------
+
+    endpoint listCategories
+        method GET
+        path "/categories"
+        response list CategorySummary
+        cache cfg.category_cache_ttl seconds
+    end
+
+    endpoint getCategoryTree
+        method GET
+        path "/categories/{category_id}/tree"
+        params
+            category_id string required
+        end
+        response CategoryTree
+        errors
+            404 using CategoryNotFound
+        end
+        cache cfg.category_cache_ttl seconds
+    end
+
+    // ---------------------------------------------------------------
+    // Admin Endpoints (separate auth)
+    // ---------------------------------------------------------------
+
+    endpoint createProduct
+        method POST
+        path "/products"
+        request CreateProductRequest
+        response ProductDetail
+        errors
+            400 using ValidationError
+            409 using SkuAlreadyExists
+        end
+        auth bearer scope "catalog:write"
+    end
+
+    endpoint updateProduct
+        method PUT
+        path "/products/{product_id}"
+        params
+            product_id string required
+        end
+        request UpdateProductRequest
+        response ProductDetail
+        errors
+            404 using ProductNotFound
+            400 using ValidationError
+        end
+        auth bearer scope "catalog:write"
+        idempotent key "X-Idempotency-Key"
+    end
+
+    endpoint updateInventory
+        method PATCH
+        path "/products/{product_id}/inventory"
+        params
+            product_id string required
+        end
+        request InventoryUpdate
+        response InventoryStatus
+        auth bearer scope "catalog:inventory"
+    end
+
+    // ---------------------------------------------------------------
+    // Events
+    // ---------------------------------------------------------------
+
+    event ProductCreated
+        topic "catalog.product.created"
+        payload ProductCreatedEvent
+        partitioned_by product_id
+    end
+
+    event InventoryChanged
+        topic "catalog.inventory.changed"
+        payload InventoryChangedEvent
+        partitioned_by product_id
+    end
+
+    event PriceChanged
+        topic "catalog.price.changed"
+        payload PriceChangedEvent
+        partitioned_by product_id
+    end
+
+    // ---------------------------------------------------------------
+    // Health
+    // ---------------------------------------------------------------
+
+    health "/health"
+    ready "/ready"
+end

@@ -1,0 +1,54 @@
+-- NexQuery Example: Investigation Session
+-- Demonstrates all clause types and query patterns
+
+-- Simple traverse: find programs calling CLRG0100
+programs calling CLRG0100;
+
+-- Traverse with filter
+programs calling CLRG0100(type = 'batch');
+
+-- Multi-clause pipeline: traverse then expand
+programs calling CLRG0100
+copybooks;
+
+-- Traverse with list target
+programs calling [CLRG0100, CLRG0200, CLRG0300];
+
+-- Domain verb: rank by complexity
+rank programs by complexity top 20;
+
+-- Domain verb: trace with depth
+trace CLRG0100 depth full;
+
+-- Domain verb: find dead code
+find-dead level paragraph in CLRG0100;
+
+-- Domain verb: dependency analysis
+deps CLRG0100 order topological;
+
+-- Domain verb: impact analysis
+impact CPYCLRG;
+
+-- Domain verb: similarity
+similar CLRG0100 by structure threshold 0.7;
+
+-- Pipeline: traverse -> filter -> expand
+programs called-by CLRG0100
+fields(section = 'WORKING-STORAGE');
+
+-- Complex filter with and/or
+programs calling CLRG0100(complexity > 3.0 and type = 'batch');
+
+-- Using each keyword
+copybooks used-by CLRG0100
+programs using each(complexity > 4.0);
+
+-- Save and run
+save my-query as 'complex batch programs';
+run my-query;
+
+-- Discover processes
+discover-processes scope all;
+
+-- Estimate cost
+estimate-cost scope all;

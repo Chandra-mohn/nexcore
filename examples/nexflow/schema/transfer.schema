@@ -1,0 +1,47 @@
+// Nexflow SchemaDSL Example: Transfer Types (v2 syntax)
+// Referenced by: account-api.api
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+schema transfer_request
+    pattern command
+
+    version 1.0.0
+
+    fields
+        source_account_id uuid required
+        target_account_id uuid required
+        amount decimal(14, 2) required
+        currency char(3) required default("USD")
+        description string optional
+        idempotency_key string optional
+    end
+
+    constraints
+        amount range(0.01, 999999999.99)
+    end
+end
+
+schema transfer_result
+    pattern event_log
+
+    version 1.0.0
+
+    identity
+        transfer_id uuid required
+    end
+
+    fields
+        transfer_id uuid required
+        source_account_id uuid required
+        target_account_id uuid required
+        amount decimal(14, 2) required
+        currency char(3) required
+        status string required
+        completed_at date optional
+        created_at date required
+    end
+
+    constraints
+        status enum("pending", "completed", "failed", "reversed")
+    end
+end

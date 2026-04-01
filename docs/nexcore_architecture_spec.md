@@ -1,5 +1,5 @@
 // Nexflow DSL Toolchain
-// Copyright (c) 2024-2026 Mphasis Corporation. All Rights Reserved.
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
 // Author: Chandra Mohn
 //
 // PROPRIETARY AND CONFIDENTIAL
@@ -32,7 +32,59 @@ nexstudio/     = All GUI (Tauri v2 + Svelte 5, desktop IDE)
 nexflow/       = Legacy Python + AI agents (gradually retired)
 ```
 
-### 2.2 Product-to-Repo Mapping
+### 2.2 Nexflow DSL Suite -- 3-Layer / 7-Grammar Model
+
+```
+Layer 1 -- Building Blocks (define WHAT)
++----------+   +----------+   +----------+
+|  .schema |   |  .rules  |   |  .xform  |
++----------+   +----------+   +----------+
+      \              |              /
+       \             |             /
+        +------------+------------+
+                     |
+Layer 2 -- Contracts (define the INTERFACE)
+         +-----------+-----------+
+         |                       |
+    +--------+             +-----------+
+    |  .api  |             |  .screen  |
+    +--------+             +-----------+
+         |                       |
+Layer 3 -- Orchestration (define HOW things wire together)
+         |                       |
+    +----------+           +----------+
+    | .service |           |  .proc   |
+    +----------+           +----------+
+```
+
+Cross-grammar reference matrix (all verified by the Nexflow compiler):
+
+```
+              ---- references ---->
+              .schema  .rules  .xform  .api
+  .api           x       x                     contract -> building blocks
+  .service       x       x       x       x     orchestration -> all
+  .proc          x       x       x       x     orchestration -> all
+  .screen        x                       x     contract -> schema + api
+```
+
+Reading the rows: ".service references .api, .schema, .rules, and .xform"
+Reading the columns: ".schema is referenced by .api, .service, .proc, and .screen"
+
+Key relationships:
+- .api -> .schema for request/response/error types
+- .api -> .rules for endpoint validation (e.g., `validate using X.rules`)
+- .service -> .api via `implements` (inbound) and `consumes` (outbound)
+- .proc -> .api for service calls and event subscriptions
+- .screen -> .api for endpoint invocation, .schema for data display
+
+Event flow (the async bridge between orchestration grammars):
+
+```
+.api declares event --> .service publishes event --> .proc subscribes to event
+```
+
+### 2.3 Product-to-Repo Mapping
 
 ```
                         nexcore (repo)                    nexstudio (repo)
@@ -59,7 +111,30 @@ Every product draws from BOTH repos: nexcore for backend, nexstudio for frontend
 
 ## 3. NexCore Workspace Structure
 
-### 3.1 Directory Layout
+### 3.1 Current Directory Layout (Phase 0 -- in progress)
+
+```
+~/workspace/nexcore/
+    Cargo.toml                              # Workspace root (resolver = "2")
+    CLAUDE.md                               # Project-level instructions
+    grammar/
+        nexflow/                            # Nexflow DSL grammars (canonical)
+            SchemaDSL.g4                    # HAVE (ported from Python)
+            RulesDSL.g4                     # HAVE (ported from Python)
+            TransformDSL.g4                 # HAVE (ported from Python)
+            ProcDSL.g4                      # HAVE (ported from Python)
+            ApiDSL.g4                       # DRAFTING (in cobol2rust/grammar/nexflow/)
+            ServiceDSL.g4                   # DRAFTING (in cobol2rust/grammar/nexflow/)
+    crates/
+        nexflow-parser/                     # HAVE (scaffold, no generated parsers yet)
+            src/lib.rs
+            Cargo.toml
+    docs/
+        nexcore_architecture_spec.md        # This file
+        nexflow_api_service_dsl_spec.md     # ApiDSL + ServiceDSL grammar design
+```
+
+### 3.2 Target Directory Layout (full build-out)
 
 ```
 ~/workspace/nexcore/
@@ -70,8 +145,8 @@ Every product draws from BOTH repos: nexcore for backend, nexstudio for frontend
             RulesDSL.g4
             TransformDSL.g4
             ProcDSL.g4
-            ApiDSL.g4                       # NEW
-            ServiceDSL.g4                   # NEW
+            ApiDSL.g4
+            ServiceDSL.g4
         cobol/                              # COBOL grammars (migrate later)
             COBOL85.g4
             CICS.g4                         # Future
@@ -83,7 +158,7 @@ Every product draws from BOTH repos: nexcore for backend, nexstudio for frontend
         nexcore-core/                       # Shared traits, config, errors
         nexcore-types/                      # Shared type system
 
-        # --- NexMig product crates ---
+        # --- NexMig product crates (migrate from cobol2rust) ---
         cobol-parser/                       # COBOL ANTLR4 parser
         cobol-transpiler/                   # COBOL -> Rust/Java codegen
         cobol-rustify/                      # Rustification engine
@@ -100,7 +175,7 @@ Every product draws from BOTH repos: nexcore for backend, nexstudio for frontend
         nexflow-codegen/                    # Code generation backends
         nexflow-lsp/                        # LSP server (tower-lsp)
 
-        # --- NexIntel product crates ---
+        # --- NexIntel product crates (migrate from cobol2rust) ---
         cobol-data/                         # Data intelligence
         nexintel/                           # Code intelligence
         lineage/                            # Lineage engine
@@ -111,10 +186,13 @@ Every product draws from BOTH repos: nexcore for backend, nexstudio for frontend
         # --- CLI ---
         nexcore-cli/                        # Unified CLI (feature-flag selected)
     examples/                               # Example DSL files
+        nexflow/
+            api/                            # .api examples (in cobol2rust/examples/)
+            service/                        # .service examples (in cobol2rust/examples/)
     docs/                                   # Architecture + grammar docs
 ```
 
-### 3.2 Crate Dependency Graph
+### 3.3 Crate Dependency Graph
 
 ```
                 nexcore-core
@@ -272,15 +350,30 @@ proven antlr-rust works for the most complex grammar (COBOL).
 | 8 | NexStudio integration | Link nexcore crates directly into Tauri backend |
 | 9 | Retire Python toolchain | Archive nexflow-toolchain, VS Code plugin uses Rust LSP |
 
-### 7.2 Phase 0 Details (immediate next step)
+### 7.2 Phase 0 Progress
 
-1. `mkdir ~/workspace/nexcore` -- create workspace
-2. Initialize Cargo workspace with workspace-level dependencies
-3. Copy Nexflow .g4 grammars to `nexcore/grammar/nexflow/`
-4. Write ApiDSL.g4 and ServiceDSL.g4 (ANTLR4 format)
-5. Create `nexflow-parser` crate with antlr-rust build pipeline
-6. Build typed AST structs for ApiDSL and ServiceDSL
-7. Write parser integration tests (parse example .api/.service files)
+| Step | Description | Status |
+|---|---|---|
+| 1 | Create nexcore workspace | DONE -- ~/workspace/nexcore/ |
+| 2 | Initialize Cargo workspace with workspace-level dependencies | DONE -- Cargo.toml, workspace lints |
+| 3 | Copy existing .g4 grammars to nexcore/grammar/nexflow/ | DONE -- Schema, Rules, Transform, Proc |
+| 4 | Draft ApiDSL.g4 and ServiceDSL.g4 | DONE -- validated with ANTLR4, all examples parse clean |
+| 5 | Write .api and .service example files | DONE -- 3+3 in nexcore/examples/nexflow/ |
+| 6 | Create nexflow-parser crate scaffold | DONE -- crate exists, no generated parsers yet |
+| 7 | Set up antlr-rust build pipeline | PENDING (NC-02) |
+| 8 | Build typed AST structs for ApiDSL and ServiceDSL | PENDING (NC-02) |
+| 9 | Write parser integration tests | PENDING (NC-02) |
+
+Grammar design decisions made during NC-01 (2026-03-30):
+- First-principles analysis: 7 design principles (P1-P7) established
+- Qualified annotation pattern: namespace.value (cfg.X, pii.X, audit.X, sec.X)
+- cfg.X = config indirection, resolved from config block or external file
+- Config block replaces middleware in .service (generic key-value, not hardcoded)
+- Structural keywords only; config values parsed as IDENTIFIER (compiler validates)
+- P6 enforced strictly: all computation in .xform, .service is pure orchestration
+- 39 keywords (ApiDSL) + 37 keywords (ServiceDSL) = 76 total (down from 100)
+- `word` rule in both grammars allows keywords in import paths and dotted expressions
+- Validated: antlr4 compiles both .g4 clean, antlr4-parse succeeds on all 6 examples
 
 ---
 
@@ -288,15 +381,15 @@ proven antlr-rust works for the most complex grammar (COBOL).
 
 See docs/nexflow_api_service_dsl_spec.md for the full 7-grammar design:
 
-| Layer | Grammar | Extension | Status |
-|---|---|---|---|
-| Building Block | SchemaDSL | .schema | HAVE (port to Rust in Phase 5) |
-| Building Block | RulesDSL | .rules | HAVE (port to Rust in Phase 5) |
-| Building Block | TransformDSL | .xform | HAVE (port to Rust in Phase 5) |
-| Contract | ApiDSL | .api | NEW (Phase 0-1) |
-| Contract | ScreenDSL | .screen | FUTURE |
-| Orchestration | ServiceDSL | .service | NEW (Phase 0-1) |
-| Orchestration | ProcDSL | .proc | HAVE (port to Rust in Phase 5) |
+| Layer | Grammar | Extension | .g4 in nexcore | Status |
+|---|---|---|---|---|
+| Building Block | SchemaDSL | .schema | YES | Ported from Python |
+| Building Block | RulesDSL | .rules | YES | Ported from Python |
+| Building Block | TransformDSL | .xform | YES | Ported from Python |
+| Contract | ApiDSL | .api | YES | DONE -- validated, 3 examples parse clean |
+| Contract | ScreenDSL | .screen | -- | FUTURE |
+| Orchestration | ServiceDSL | .service | YES | DONE -- validated, 3 examples parse clean |
+| Orchestration | ProcDSL | .proc | YES | Ported from Python |
 
 ---
 
@@ -312,3 +405,7 @@ See docs/nexflow_api_service_dsl_spec.md for the full 7-grammar design:
 | D6 | Grammars in nexcore/grammar/ | Canonical location; both Rust and legacy Python consume from here | 2026-03-30 |
 | D7 | No cross-product hard deps | NexMod works without NexMig (greenfield); bridge crates are optional | 2026-03-30 |
 | D8 | Python toolchain gradually retired | nexflow-toolchain superseded by nexcore; VS Code plugin rewired to Rust LSP | 2026-03-30 |
+| D9 | Qualified annotation pattern (namespace.value) | Extends pii.X precedent from SchemaDSL; cfg.X for config indirection, audit.X/sec.X future | 2026-03-30 |
+| D10 | Config block replaces middleware in .service | Generic key-value pairs; compiler validates known keys; overridable via nexflow.config.yaml | 2026-03-30 |
+| D11 | Structural keywords only; config values as IDENTIFIER | Reduces keyword count ~25%; auth schemes, targets, time units parsed as identifiers | 2026-03-30 |
+| D12 | Grammar = syntax, Compiler = semantics | Grammar is permissive; name resolution, type checking, cross-grammar validation are compiler concerns | 2026-03-30 |

@@ -1,0 +1,192 @@
+// Nexflow ServiceDSL Example: Order Service (Greenfield E-commerce)
+// Demonstrates: saga pattern, parallel calls, event-driven, config block, cfg. indirection
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./apis/order-api.api
+import ./apis/catalog-api.api
+import ./apis/account-api.api
+import ./apis/notification-api.api
+import ./rules/order-validation.rules
+import ./transforms/order-transform.xform
+import ./schemas/order.schema
+
+service OrderService
+    description "Order lifecycle -- placement, fulfillment, cancellation"
+
+    implements OrderAPI
+    consumes CatalogAPI, AccountAPI, NotificationAPI
+
+    config
+        // Observability
+        tracing_provider "opentelemetry"
+        tracing_service_name "order-service"
+        metrics_provider "prometheus"
+        metrics_namespace "order"
+        logging_correlation_header "X-Request-ID"
+
+        // Database
+        order_db_pool_size 20
+
+        // Service call timeouts
+        catalog_timeout 3
+        account_timeout 3
+    end
+
+    // ---------------------------------------------------------------
+    // Order Placement (saga with compensation)
+    // ---------------------------------------------------------------
+
+    handler placeOrder
+        authorize scope "orders:write"
+        validate request using OrderValidation.rules
+
+        // Step 1: verify all items are available (parallel)
+        parallel
+            call CatalogAPI.getProduct with product_id = item.product_id
+                for each item in request.items
+                into product_details
+            end
+        end
+
+        on_error
+            404 when product_details contains null
+            422 when product_details contains out_of_stock
+        end
+
+        // Step 2: calculate totals
+        transform request using CalculateOrderTotal.xform into order
+
+        // Step 3: saga -- reserve, charge, confirm
+        saga
+            step reserve_inventory
+                call CatalogAPI.reserveInventory with order_id = order.order_id
+                compensate
+                    call CatalogAPI.releaseInventory with order_id = order.order_id
+                end
+            end
+
+            step charge_payment
+                call AccountAPI.transferFunds with amount = order.total
+                compensate
+                    transform order using NegateAmount.xform into refund
+                    call AccountAPI.transferFunds with amount = refund.total
+                end
+            end
+
+            step confirm_order
+                persist order to OrderDB
+                compensate
+                    persist order.status = "cancelled" to OrderDB
+                end
+            end
+        end
+
+        publish OrderPlaced
+        call NotificationAPI.sendEmail with template "order_confirmation"
+        respond 201
+    end
+
+    // ---------------------------------------------------------------
+    // Order Queries
+    // ---------------------------------------------------------------
+
+    handler getOrder
+        authorize scope "orders:read"
+        lookup order from OrderDB
+            where order_id = request.order_id
+        end
+        on_error
+            404 when order is null
+            403 when order.customer_id != request.customer_id
+        end
+        transform order using FormatOrderDetail.xform into response
+    end
+
+    handler listOrders
+        authorize scope "orders:read"
+        lookup orders from OrderDB
+            where customer_id = request.customer_id
+            where status = request.status
+            where created_at >= request.since
+        end
+        transform orders using FormatOrderSummary.xform into response
+    end
+
+    // ---------------------------------------------------------------
+    // Order Cancellation
+    // ---------------------------------------------------------------
+
+    handler cancelOrder
+        authorize scope "orders:write"
+        lookup order from OrderDB
+            where order_id = request.order_id
+        end
+        on_error
+            404 when order is null
+            409 when order.status = "shipped"
+            409 when order.status = "delivered"
+        end
+
+        saga
+            step release_inventory
+                call CatalogAPI.releaseInventory with order_id = order.order_id
+                compensate
+                    call CatalogAPI.reserveInventory with order_id = order.order_id
+                end
+            end
+
+            step refund_payment
+                transform order using NegateAmount.xform into refund
+                call AccountAPI.transferFunds with amount = refund.total
+                compensate
+                    call AccountAPI.transferFunds with amount = order.total
+                end
+            end
+
+            step update_status
+                persist order.status = "cancelled" to OrderDB
+                compensate
+                    persist order.status = order.previous_status to OrderDB
+                end
+            end
+        end
+
+        publish OrderCancelled
+        call NotificationAPI.sendEmail with template "order_cancellation"
+        respond 200
+    end
+
+    // ---------------------------------------------------------------
+    // Order Status Updates (internal, from fulfillment .proc)
+    // ---------------------------------------------------------------
+
+    handler updateOrderStatus
+        authorize scope "orders:internal"
+        lookup order from OrderDB
+            where order_id = request.order_id
+        end
+        on_error
+            404 when order is null
+        end
+        persist order.status = request.new_status to OrderDB
+        publish OrderStatusChanged
+        call NotificationAPI.sendEmail with template "order_status_update"
+        respond 200
+    end
+
+    // ---------------------------------------------------------------
+    // Cache & Health
+    // ---------------------------------------------------------------
+
+    cache
+        getOrder ttl 10 seconds invalidate_on cancelOrder, updateOrderStatus
+    end
+
+    health "/health"
+        check database OrderDB timeout 5 seconds
+        check service CatalogAPI timeout cfg.catalog_timeout seconds
+        check service AccountAPI timeout cfg.account_timeout seconds
+    end
+
+    ready "/ready"
+end

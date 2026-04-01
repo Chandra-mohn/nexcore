@@ -1,5 +1,5 @@
 // Nexflow DSL Toolchain
-// Copyright (c) 2024-2026 Mphasis Corporation. All Rights Reserved.
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
 // Author: Chandra Mohn
 //
 // PROPRIETARY AND CONFIDENTIAL
@@ -449,19 +449,19 @@ mobile-bff-service.service
 
 ## 6. Cross-Grammar Relationships
 
-### 6.1 Reference Graph
+### 6.1 Reference Matrix
 
 ```
-.schema  <-----+-----+-----+-----+-----+-----+
-                |     |     |     |     |     |
-.rules   <-----+-----|-----|-----|-----|     |
-                |     |     |     |           |
-.xform   <-----+-----|-----|     |           |
-                |     |     |     |           |
-.api     <---------- .service    |           |
-                      |           |           |
-.api     <---------- .proc      .screen --> .api
+              ---- references ---->
+              .schema  .rules  .xform  .api
+  .api           x       x                     contract -> building blocks
+  .service       x       x       x       x     orchestration -> all
+  .proc          x       x       x       x     orchestration -> all
+  .screen        x                        x     contract -> schema + api
 ```
+
+Reading the rows: ".service references .api, .schema, .rules, and .xform"
+Reading the columns: ".schema is referenced by .api, .service, .proc, and .screen"
 
 - .api references .schema (request/response types, error types)
 - .api references .rules (validation rules for endpoints)

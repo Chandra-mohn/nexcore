@@ -1,5 +1,5 @@
 // NexCore -- Nexflow Parser
-// Copyright (c) 2024-2026 Mphasis Corporation. All Rights Reserved.
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
 //
 // PROPRIETARY AND CONFIDENTIAL
 // Unauthorized use, reproduction, or distribution is prohibited.
@@ -7,20 +7,24 @@
 //! Nexflow DSL parsers and typed ASTs.
 //!
 //! This crate provides ANTLR4-generated parsers and strongly-typed AST
-//! representations for all 7 Nexflow DSL grammars:
+//! representations for Nexflow DSL grammars. Currently implemented:
 //!
-//! - **SchemaDSL** (.schema) -- Data types, structures, constraints
-//! - **RulesDSL** (.rules) -- Business decisions, validation, decision tables
-//! - **TransformDSL** (.xform) -- Data transformations, field mappings
-//! - **ProcDSL** (.proc) -- Stream/batch pipeline orchestration
 //! - **ApiDSL** (.api) -- Service contracts, endpoints, events
 //! - **ServiceDSL** (.service) -- Microservice request/response orchestration
-//! - **ScreenDSL** (.screen) -- UI contracts (future)
+//! - **SchemaDSL** (.schema) -- Schema registry, data types, mutation patterns
+//! - **TransformDSL** (.xform) -- Data transformations, field mappings
+//! - **RulesDSL** (.rules) -- Decision tables, procedural business rules
+//! - **ProcDSL** (.proc) -- Process orchestration, streaming pipelines
 
-// Modules will be added as grammars are implemented:
-// pub mod api;
-// pub mod service;
-// pub mod schema;
-// pub mod rules;
-// pub mod transform;
-// pub mod proc;
+pub mod ast;
+pub mod generated;
+pub mod parse;
+
+// Re-export the main parse functions for convenience.
+pub use parse::api_builder::parse_api;
+pub use parse::nexquery_builder::parse_nexquery;
+pub use parse::proc_builder::parse_proc;
+pub use parse::rules_builder::parse_rules;
+pub use parse::schema_builder::parse_schema;
+pub use parse::service_builder::parse_service;
+pub use parse::transform_builder::parse_transform;

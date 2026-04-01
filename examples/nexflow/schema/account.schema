@@ -1,0 +1,239 @@
+// Nexflow SchemaDSL Example: Account Domain Types (v2 syntax)
+// Referenced by: account-api.api, account-service.service
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+// ----------------------------------------------------------------------------
+// Core Account Types
+// ----------------------------------------------------------------------------
+
+schema account_summary
+    pattern master_data
+
+    version 1.0.0
+
+    identity
+        account_id uuid required
+    end
+
+    fields
+        account_id uuid required
+        account_number string(20) required
+        holder_name string required
+        status string required
+        region string optional
+        balance decimal(14, 2) required
+        currency char(3) required default("USD")
+        created_at date required
+    end
+end
+
+schema account_detail
+    pattern master_data
+
+    version 1.0.0
+
+    identity
+        account_id uuid required
+    end
+
+    fields
+        account_id uuid required
+        account_number string(20) required
+        holder_name string required pii.name
+        email string optional pii.email
+        phone string optional pii.phone
+        status string required
+        account_type string required
+        region string optional
+        balance decimal(14, 2) required
+        currency char(3) required default("USD")
+        opened_date date required
+        closed_date date optional
+        created_at date required
+        updated_at date required
+    end
+
+    constraints
+        status enum("active", "suspended", "closed")
+        account_type enum("checking", "savings", "business")
+    end
+end
+
+schema account_balance
+    pattern master_data
+
+    version 1.0.0
+
+    identity
+        account_id uuid required
+    end
+
+    fields
+        account_id uuid required
+        balance decimal(14, 2) required
+        available_balance decimal(14, 2) required
+        currency char(3) required
+        as_of date required
+    end
+end
+
+schema account_closure_receipt
+    pattern event_log
+
+    version 1.0.0
+
+    identity
+        receipt_id uuid required
+    end
+
+    fields
+        receipt_id uuid required
+        account_id uuid required
+        closed_at date required
+        final_balance decimal(14, 2) required
+        reason string optional
+    end
+end
+
+schema account_detail_v1
+    pattern master_data
+
+    version 1.0.0
+
+    identity
+        account_id uuid required
+    end
+
+    fields
+        account_id uuid required
+        account_number string(20) required
+        holder_name string required
+        status string required
+        balance decimal(14, 2) required
+    end
+end
+
+schema account_status
+    pattern reference_data
+
+    version 1.0.0
+
+    fields
+        code string required
+        label string required
+    end
+
+    entries
+        active:
+            code "active"
+            label "Active"
+        suspended:
+            code "suspended"
+            label "Suspended"
+        closed:
+            code "closed"
+            label "Closed"
+    end
+end
+
+// ----------------------------------------------------------------------------
+// Request Types
+// ----------------------------------------------------------------------------
+
+schema create_account_request
+    pattern command
+
+    version 1.0.0
+
+    fields
+        holder_name string required pii.name
+        email string required pii.email
+        phone string optional pii.phone
+        account_type string required
+        initial_deposit decimal(14, 2) optional
+        currency char(3) required default("USD")
+    end
+
+    constraints
+        account_type enum("checking", "savings", "business")
+    end
+end
+
+// ----------------------------------------------------------------------------
+// Event Types
+// ----------------------------------------------------------------------------
+
+schema account_created_event
+    pattern event_log
+
+    version 1.0.0
+
+    identity
+        event_id uuid required
+    end
+
+    streaming
+        key_fields [account_id]
+        time_field created_at
+        time_semantics event_time
+        watermark_delay 5 seconds
+    end
+
+    fields
+        event_id uuid required
+        account_id uuid required
+        holder_name string required
+        account_type string required
+        created_at date required
+    end
+end
+
+schema account_closed_event
+    pattern event_log
+
+    version 1.0.0
+
+    identity
+        event_id uuid required
+    end
+
+    streaming
+        key_fields [account_id]
+        time_field closed_at
+        time_semantics event_time
+    end
+
+    fields
+        event_id uuid required
+        account_id uuid required
+        reason string optional
+        final_balance decimal(14, 2) required
+        closed_at date required
+    end
+end
+
+schema balance_changed_event
+    pattern event_log
+
+    version 1.0.0
+
+    identity
+        event_id uuid required
+    end
+
+    streaming
+        key_fields [account_id]
+        time_field changed_at
+        time_semantics event_time
+    end
+
+    fields
+        event_id uuid required
+        account_id uuid required
+        previous_balance decimal(14, 2) required
+        new_balance decimal(14, 2) required
+        change_amount decimal(14, 2) required
+        reason string required
+        changed_at date required
+    end
+end

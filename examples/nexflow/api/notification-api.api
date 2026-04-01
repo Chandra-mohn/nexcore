@@ -1,0 +1,217 @@
+// Nexflow ApiDSL Example: Notification Service
+// Demonstrates: async operations, webhooks, multiple auth schemes, cfg. indirection
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./schemas/notification.schema
+import ./schemas/errors.schema
+
+api NotificationAPI
+    version "2.0"
+    base "/api/v2/notifications"
+    description "Multi-channel notification delivery -- email, SMS, push, webhook"
+
+    targets rest
+
+    auth default bearer scope "notifications:send"
+    content_type json
+    rate_limit cfg.default_rate_limit per minute burst cfg.default_burst
+
+    config
+        default_rate_limit 2000
+        default_burst 100
+        send_timeout 10
+        batch_timeout 60
+        batch_rate_limit 50
+    end
+
+    // ---------------------------------------------------------------
+    // Send Endpoints (all async -- return 202)
+    // ---------------------------------------------------------------
+
+    endpoint sendEmail
+        method POST
+        path "/email"
+        request EmailRequest
+        response DeliveryReceipt
+        errors
+            400 using ValidationError
+            429 using RateLimitExceeded
+        end
+        timeout cfg.send_timeout seconds
+        async
+    end
+
+    endpoint sendSms
+        method POST
+        path "/sms"
+        request SmsRequest
+        response DeliveryReceipt
+        errors
+            400 using ValidationError
+            429 using RateLimitExceeded
+        end
+        timeout cfg.send_timeout seconds
+        async
+    end
+
+    endpoint sendPush
+        method POST
+        path "/push"
+        request PushRequest
+        response DeliveryReceipt
+        errors
+            400 using ValidationError
+            429 using RateLimitExceeded
+        end
+        timeout cfg.send_timeout seconds
+        async
+    end
+
+    endpoint sendBatch
+        method POST
+        path "/batch"
+        request BatchNotificationRequest
+        response BatchDeliveryReceipt
+        errors
+            400 using ValidationError
+            413 using BatchTooLarge
+        end
+        auth bearer scope "notifications:batch"
+        rate_limit cfg.batch_rate_limit per minute
+        timeout cfg.batch_timeout seconds
+        async
+    end
+
+    // ---------------------------------------------------------------
+    // Status and History
+    // ---------------------------------------------------------------
+
+    endpoint getDeliveryStatus
+        method GET
+        path "/deliveries/{delivery_id}"
+        params
+            delivery_id string required
+        end
+        response DeliveryStatus
+        errors
+            404 using DeliveryNotFound
+        end
+    end
+
+    endpoint listDeliveries
+        method GET
+        path "/deliveries"
+        query
+            channel string optional
+            status string optional
+            since datetime optional
+            until datetime optional
+        end
+        response paginated DeliveryStatus
+    end
+
+    // ---------------------------------------------------------------
+    // Webhook Management
+    // ---------------------------------------------------------------
+
+    endpoint registerWebhook
+        method POST
+        path "/webhooks"
+        request WebhookRegistration
+        response WebhookConfig
+        errors
+            400 using ValidationError
+            409 using WebhookAlreadyExists
+        end
+        auth bearer scope "notifications:admin"
+    end
+
+    endpoint listWebhooks
+        method GET
+        path "/webhooks"
+        response list WebhookConfig
+        auth bearer scope "notifications:admin"
+    end
+
+    endpoint deleteWebhook
+        method DELETE
+        path "/webhooks/{webhook_id}"
+        params
+            webhook_id string required
+        end
+        errors
+            404 using WebhookNotFound
+        end
+        auth bearer scope "notifications:admin"
+    end
+
+    // ---------------------------------------------------------------
+    // Template Management
+    // ---------------------------------------------------------------
+
+    endpoint listTemplates
+        method GET
+        path "/templates"
+        query
+            channel string optional
+            locale string optional
+        end
+        response paginated NotificationTemplate
+        auth bearer scope "notifications:templates"
+    end
+
+    endpoint createTemplate
+        method POST
+        path "/templates"
+        request CreateTemplateRequest
+        response NotificationTemplate
+        errors
+            400 using ValidationError
+            409 using TemplateAlreadyExists
+        end
+        auth bearer scope "notifications:templates"
+    end
+
+    // ---------------------------------------------------------------
+    // Events
+    // ---------------------------------------------------------------
+
+    event NotificationSent
+        topic "notifications.sent"
+        payload NotificationSentEvent
+        partitioned_by recipient_id
+    end
+
+    event NotificationFailed
+        topic "notifications.failed"
+        payload NotificationFailedEvent
+        partitioned_by recipient_id
+    end
+
+    event NotificationDelivered
+        topic "notifications.delivered"
+        payload NotificationDeliveredEvent
+        partitioned_by recipient_id
+    end
+
+    event WebhookDelivered
+        topic "notifications.webhook.delivered"
+        payload WebhookDeliveredEvent
+        partitioned_by webhook_id
+    end
+
+    // ---------------------------------------------------------------
+    // Dependencies
+    // ---------------------------------------------------------------
+
+    dependencies
+        AuditAPI version "1.x"
+    end
+
+    // ---------------------------------------------------------------
+    // Health
+    // ---------------------------------------------------------------
+
+    health "/health"
+    ready "/ready"
+end

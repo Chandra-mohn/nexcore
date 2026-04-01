@@ -1,0 +1,28 @@
+// Nexflow ProcDSL Example: Order Processing Pipeline
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./order.schema
+
+process order_processing
+
+    receive orders from source into raw_orders
+        from kafka "orders-inbound" key order_id
+        schema order_event
+
+    emit processed_orders to output
+        to kafka "orders-processed" key order_id
+        schema processed_order_event
+
+end
+
+process daily_settlement
+
+    receive transactions from source into raw_txns
+        from kafka "daily-transactions" key account_id
+        schema transaction_event
+
+    emit settlements to output
+        to kafka "daily-settlements" key account_id
+        schema settlement_event
+
+end

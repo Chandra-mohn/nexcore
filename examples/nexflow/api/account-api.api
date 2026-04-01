@@ -1,0 +1,203 @@
+// Nexflow ApiDSL Example: Account Service Contract
+// Demonstrates: CRUD endpoints, events, auth, versioning, cfg. indirection, deprecation
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+import ./schemas/account.schema
+import ./schemas/address.schema
+import ./schemas/transfer.schema
+import ./schemas/errors.schema
+
+api AccountAPI
+    version "2.1"
+    base "/api/v2/accounts"
+    description "Account management service -- balances, transfers, lifecycle"
+
+    targets rest, graphql, grpc
+
+    auth default bearer scope "accounts:read"
+    content_type json
+    rate_limit cfg.default_rate_limit per minute burst cfg.default_burst
+    pagination cursor default_size 50 max_size 200
+
+    config
+        default_rate_limit 1000
+        default_burst 50
+        transfer_rate_limit 100
+        balance_timeout 5
+        transfer_timeout 30
+        cors_origins "https://app.example.com", "https://admin.example.com"
+        cors_max_age 3600
+    end
+
+    cors
+        origins cfg.cors_origins
+        methods GET, POST, PUT, DELETE
+        headers "Authorization", "X-Request-ID", "X-Idempotency-Key"
+        max_age cfg.cors_max_age
+    end
+
+    // ---------------------------------------------------------------
+    // Sync Endpoints
+    // ---------------------------------------------------------------
+
+    endpoint listAccounts
+        method GET
+        path "/"
+        description "List accounts with optional filters"
+        query
+            status AccountStatus optional
+            region string optional
+            since datetime optional
+        end
+        response paginated AccountSummary
+        cache 60 seconds
+    end
+
+    endpoint getAccount
+        method GET
+        path "/{account_id}"
+        params
+            account_id string required
+        end
+        response AccountDetail
+        errors
+            404 using AccountNotFound
+            403 using InsufficientPermission
+        end
+        cache 30 seconds
+    end
+
+    endpoint getBalance
+        method GET
+        path "/{account_id}/balance"
+        params
+            account_id string required
+        end
+        response AccountBalance
+        errors
+            404 using AccountNotFound
+            403 using InsufficientPermission
+        end
+        auth bearer scope "accounts:balance"
+        timeout cfg.balance_timeout seconds
+        cache 15 seconds
+    end
+
+    endpoint createAccount
+        method POST
+        path "/"
+        request CreateAccountRequest
+        response AccountDetail
+        errors
+            400 using ValidationError
+            409 using AccountAlreadyExists
+        end
+        auth bearer scope "accounts:write"
+        rate_limit cfg.transfer_rate_limit per minute
+    end
+
+    endpoint updateAddress
+        method PUT
+        path "/{account_id}/address"
+        params
+            account_id string required
+        end
+        request AddressUpdate
+        response AccountDetail
+        errors
+            404 using AccountNotFound
+            400 using ValidationError
+        end
+        validate using AddressValidation.rules
+        auth bearer scope "accounts:write"
+        idempotent key "X-Idempotency-Key"
+    end
+
+    endpoint closeAccount
+        method DELETE
+        path "/{account_id}"
+        params
+            account_id string required
+        end
+        response AccountClosureReceipt
+        errors
+            404 using AccountNotFound
+            409 using AccountHasBalance
+        end
+        auth bearer scope "accounts:admin"
+    end
+
+    endpoint transferFunds
+        method POST
+        path "/transfers"
+        request TransferRequest
+        response TransferResult
+        errors
+            400 using ValidationError
+            422 using InsufficientFunds
+        end
+        auth bearer scope "accounts:transfer"
+        rate_limit cfg.transfer_rate_limit per minute
+        timeout cfg.transfer_timeout seconds
+        async
+    end
+
+    // ---------------------------------------------------------------
+    // Event Contracts (published domain events)
+    // ---------------------------------------------------------------
+
+    event AccountCreated
+        topic "accounts.created"
+        payload AccountCreatedEvent
+        partitioned_by account_id
+    end
+
+    event AccountClosed
+        topic "accounts.closed"
+        payload AccountClosedEvent
+        partitioned_by account_id
+    end
+
+    event BalanceChanged
+        topic "accounts.balance.changed"
+        payload BalanceChangedEvent
+        partitioned_by account_id
+    end
+
+    event AddressChanged
+        topic "accounts.address.changed"
+        payload AddressChangedEvent
+        partitioned_by account_id
+    end
+
+    // ---------------------------------------------------------------
+    // Dependencies
+    // ---------------------------------------------------------------
+
+    dependencies
+        AuditAPI version "1.x"
+        NotificationAPI version "2.x"
+    end
+
+    // ---------------------------------------------------------------
+    // Health
+    // ---------------------------------------------------------------
+
+    health "/health"
+    ready "/ready"
+
+    // ---------------------------------------------------------------
+    // Deprecated Endpoints (lifecycle management)
+    // ---------------------------------------------------------------
+
+    deprecated endpoint getAccountV1
+        method GET
+        path "/v1/{account_id}"
+        params
+            account_id string required
+        end
+        response AccountDetailV1
+        sunset "2026-12-31"
+        replacement getAccount
+    end
+end

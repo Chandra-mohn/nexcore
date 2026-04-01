@@ -1,0 +1,48 @@
+// Nexflow SchemaDSL Example: Address Types (v2 syntax)
+// Referenced by: account-api.api
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+schema address_update
+    pattern command
+
+    version 1.0.0
+
+    fields
+        street1 string required
+        street2 string optional
+        city string required
+        state string(2) required
+        postal_code string(10) required
+        country char(2) required default("US")
+    end
+
+    constraints
+        state pattern("[A-Z]{2}")
+        postal_code pattern("[0-9]{5}(-[0-9]{4})?")
+        country pattern("[A-Z]{2}")
+    end
+end
+
+schema address_changed_event
+    pattern event_log
+
+    version 1.0.0
+
+    identity
+        event_id uuid required
+    end
+
+    streaming
+        key_fields [account_id]
+        time_field changed_at
+        time_semantics event_time
+    end
+
+    fields
+        event_id uuid required
+        account_id uuid required
+        previous_address string optional
+        new_address string required
+        changed_at date required
+    end
+end

@@ -1,0 +1,107 @@
+// Nexflow TransformDSL Example: Account Transforms
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
+
+// Simple field-level transform
+transform normalize_name
+    version: 1.0.0
+    description: "Normalize account holder name to uppercase"
+    pure: true
+
+    input: string
+    output: string
+
+    apply
+        output = uppercase(input)
+    end
+end
+
+// Multi-input transform with expression
+transform calculate_balance
+    version: 1.0.0
+    description: "Calculate available balance from account fields"
+    pure: true
+
+    input
+        current_balance: decimal
+        pending_debits: decimal
+        pending_credits: decimal
+    end
+
+    output: decimal
+
+    apply
+        output = current_balance - pending_debits + pending_credits
+    end
+end
+
+// Block-level transform with mappings
+transform_block format_account_summary
+    version: 1.0.0
+
+    input
+        account: account_detail
+    end
+
+    output
+        summary: account_summary
+    end
+
+    mappings
+        summary.account_id = account.account_id
+        summary.account_number = account.account_number
+        summary.holder_name = account.holder_name
+        summary.status = account.status
+        summary.balance = account.balance
+        summary.currency = account.currency
+        summary.created_at = account.created_at
+    end
+end
+
+// Transform with validation
+transform validate_transfer_amount
+    version: 1.0.0
+    description: "Validate and normalize transfer amount"
+    pure: true
+
+    input
+        amount: decimal
+        currency: string
+    end
+
+    output
+        validated_amount: decimal
+        formatted: string
+    end
+
+    validate_input
+        amount > 0 : "Amount must be positive"
+        amount <= 999999999.99 : "Amount exceeds maximum"
+    end
+
+    apply
+        validated_amount = round(amount, 2)
+        formatted = concat(currency, " ", to_string(validated_amount))
+    end
+end
+
+// Transform with error handling
+transform safe_division
+    version: 1.0.0
+    pure: true
+
+    input
+        numerator: decimal
+        denominator: decimal
+    end
+
+    output: decimal
+
+    apply
+        output = when denominator == 0 : 0 otherwise : numerator / denominator
+    end
+
+    on_error
+        action: use_default
+        default: 0
+    end
+end

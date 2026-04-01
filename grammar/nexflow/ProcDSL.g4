@@ -1,5 +1,5 @@
 // Nexflow DSL Toolchain
-// Copyright (c) 2024-2026 Mphasis Corporation. All Rights Reserved.
+// Copyright (c) 2024-2026 Chandra Mohn. All Rights Reserved.
 // Author: Chandra Mohn
 //
 // PROPRIETARY AND CONFIDENTIAL
