@@ -285,6 +285,8 @@ fn test_generate_output() {
         .args([
             "generate",
             &dir.join("api/account-api.api").display().to_string(),
+            "--target",
+            "rust",
             "--include",
             &dir.join("schema/account.schema").display().to_string(),
             "--include",

@@ -9,8 +9,8 @@
 //! Subcommands:
 //! - `parse`    -- Parse DSL file and show AST (json/tree/summary/graph)
 //! - `validate` -- Validate DSL files (file, directory, or project)
-//! - `build`    -- Full pipeline: parse -> validate -> generate
-//! - `generate` -- Generate Rust/Axum service code
+//! - `build`    -- Full pipeline: parse -> validate -> generate (--target rust|java)
+//! - `generate` -- Generate service code (--target rust|java)
 //! - `init`     -- Initialize a new Nexflow project
 //! - `clean`    -- Remove generated files
 //! - `info`     -- Show project information
@@ -79,12 +79,12 @@ enum Command {
 
     /// Build the project -- full pipeline: parse -> validate -> generate.
     Build {
-        /// Target runtime
-        #[arg(long, short, default_value = "flink",
-              value_parser = ["flink", "spark", "rust", "all"])]
+        /// Target: "rust" (Axum service), "java" (Flink/Avro), "all"
+        #[arg(long, short, default_value = "java",
+              value_parser = ["java", "rust", "all"])]
         target: String,
 
-        /// Output directory (default: from nexflow.toml)
+        /// Output directory (default: from nexflow.toml or "generated/")
         #[arg(long, short)]
         output: Option<PathBuf>,
 
@@ -97,13 +97,19 @@ enum Command {
         verify: bool,
     },
 
-    /// Generate Rust/Axum service code.
+    /// Generate service code from DSL files.
     ///
     /// Pass a .api or .service file; imports are resolved automatically.
+    /// Use --target to select output language (default: java).
     Generate {
-        /// Entry point file (.api or .service)
+        /// Entry point file (.api, .service, or directory)
         #[arg(required = true)]
         file: PathBuf,
+
+        /// Target: "rust" (Axum service), "java" (Flink/Avro)
+        #[arg(long, short, default_value = "java",
+              value_parser = ["java", "rust"])]
+        target: String,
 
         /// Additional files not reachable via imports
         #[arg(long = "include")]
@@ -158,9 +164,10 @@ fn main() {
         } => cmd_build(&target, output.as_deref(), dry_run, verify, verbose),
         Command::Generate {
             file,
+            target,
             extra_files,
             output,
-        } => cmd_generate(&file, &extra_files, &output, verbose),
+        } => cmd_generate(&file, &target, &extra_files, &output, verbose),
         Command::Init { name, force } => cmd_init(&name, force),
         Command::Clean { all } => cmd_clean(all),
         Command::Info => cmd_info(),
@@ -471,8 +478,8 @@ fn collect_dsl_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
 // ---------------------------------------------------------------------------
 
 fn cmd_build(
-    _target: &str,
-    _output: Option<&Path>,
+    target: &str,
+    output: Option<&Path>,
     dry_run: bool,
     _verify: bool,
     verbose: bool,
@@ -481,7 +488,7 @@ fn cmd_build(
     let proj = project::NexflowProject::load()?;
 
     if verbose {
-        eprintln!("Building project '{}'...", proj.name);
+        eprintln!("Building project '{}' (target: {target})...", proj.name);
     }
 
     // Phase 1: Collect and parse all DSL files
@@ -542,27 +549,145 @@ fn cmd_build(
 
     if dry_run {
         println!("[OK] Validation passed. Would generate code for:");
-        println!("  APIs: {}", loaded.apis.len());
-        println!("  Services: {}", loaded.services.len());
-        println!("  Schemas: {}", loaded.schemas.len());
+        println!("  Target:     {target}");
+        println!("  APIs:       {}", loaded.apis.len());
+        println!("  Services:   {}", loaded.services.len());
+        println!("  Schemas:    {}", loaded.schemas.len());
+        println!("  Transforms: {}", loaded.transforms.len());
+        println!("  Rules:      {}", loaded.rules.len());
+        println!("  Procs:      {}", loaded.procs.len());
         return Ok(());
     }
 
-    // Phase 3: Generate (for each API)
-    if loaded.apis.is_empty() {
-        println!("[OK] Validation passed. No API definitions found to generate from.");
-        return Ok(());
-    }
-
+    // Phase 3: Generate
     if verbose {
-        eprintln!("  Phase 3: Generating code...");
+        eprintln!("  Phase 3: Generating code (target: {target})...");
     }
 
-    let output_dir = proj.output_dir.clone();
+    let output_dir = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| proj.output_dir.clone());
+
+    let mut total_files = 0;
+
+    match target {
+        "java" | "all" => {
+            total_files += build_java(&loaded, &output_dir.join("java"), verbose)?;
+        }
+        _ => {}
+    }
+    match target {
+        "rust" | "all" => {
+            total_files += build_rust(&loaded, &output_dir.join("rust"), verbose)?;
+        }
+        _ => {}
+    }
+
+    if total_files == 0 {
+        println!("[OK] Validation passed. No DSL definitions found to generate from.");
+    } else {
+        println!(
+            "[OK] Build successful. Generated {} file(s) in '{}'.",
+            total_files,
+            output_dir.display()
+        );
+    }
+
+    Ok(())
+}
+
+/// Generate Java/Avro/Flink code from all loaded DSLs.
+fn build_java(
+    loaded: &nexflow_compiler::resolve::Project,
+    output_dir: &Path,
+    verbose: bool,
+) -> Result<usize, String> {
+    use nexflow_codegen::java;
+
+    let mut all_files = std::collections::HashMap::new();
+
+    // L0: Runtime library (always)
+    let rt_config = java::runtime::RuntimeGenConfig::default();
+    let rt = java::runtime::generate_java_runtime(&rt_config)?;
+    all_files.extend(rt.files);
+
+    // L2: Schemas -> .avsc + helpers
+    if !loaded.schemas.is_empty() {
+        let schema_config = java::JavaGenConfig::default();
+        let schemas = java::generate_java_schemas(&loaded.schemas, &schema_config)?;
+        all_files.extend(schemas.files);
+        if verbose {
+            eprintln!("    L2: {} schema(s) -> .avsc + helpers", loaded.schemas.len());
+        }
+    }
+
+    // L3: Transforms -> MapFunction
+    for xform_prog in &loaded.transforms {
+        let xform_config = java::xform::XformGenConfig::default();
+        let xforms = java::xform::generate_java_transforms(xform_prog, &xform_config)?;
+        if verbose {
+            let count = xform_prog.transforms.len() + xform_prog.transform_blocks.len();
+            eprintln!("    L3: {} transform(s) -> MapFunction", count);
+        }
+        all_files.extend(xforms.files);
+    }
+
+    // L4: Rules -> Decision tables + procedural rules
+    for rules_prog in &loaded.rules {
+        let rules_config = java::rules::RulesGenConfig::default();
+        let rules = java::rules::generate_java_rules(rules_prog, &rules_config)?;
+        if verbose {
+            let count = rules_prog.decision_tables.len() + rules_prog.procedural_rules.len();
+            eprintln!("    L4: {} rule(s) -> Table/Rule", count);
+        }
+        all_files.extend(rules.files);
+    }
+
+    // L1: Proc -> Flink Job
+    for proc_prog in &loaded.procs {
+        let proc_config = java::proc::ProcGenConfig::default();
+        let procs = java::proc::generate_java_proc(proc_prog, &proc_config)?;
+        if verbose {
+            eprintln!("    L1: {} process(es) -> Job", proc_prog.processes.len());
+        }
+        all_files.extend(procs.files);
+    }
+
+    // Write all files
+    let total = all_files.len();
+    for (rel_path, content) in &all_files {
+        let full_path = output_dir.join(rel_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Cannot create directory: {e}"))?;
+        }
+        std::fs::write(&full_path, content)
+            .map_err(|e| format!("Cannot write '{}': {e}", full_path.display()))?;
+        if verbose {
+            eprintln!("    -> {}", full_path.display());
+        }
+    }
+
+    if total > 0 && verbose {
+        eprintln!("    Java: {total} file(s) written to {}", output_dir.display());
+    }
+
+    Ok(total)
+}
+
+/// Generate Rust/Axum code from API + Schema + Service DSLs.
+fn build_rust(
+    loaded: &nexflow_compiler::resolve::Project,
+    output_dir: &Path,
+    verbose: bool,
+) -> Result<usize, String> {
+    if loaded.apis.is_empty() {
+        return Ok(0);
+    }
+
     let mut total_files = 0;
 
     for api in &loaded.apis {
-        // Find matching service
         let service = loaded
             .services
             .iter()
@@ -574,7 +699,6 @@ fn cmd_build(
             nexflow_codegen::generate(api, &loaded.schemas)?
         };
 
-        // Write files
         let api_output = output_dir.join(nexflow_codegen::naming::pascal_to_snake(&api.name));
         std::fs::create_dir_all(&api_output)
             .map_err(|e| format!("Cannot create directory: {e}"))?;
@@ -594,13 +718,11 @@ fn cmd_build(
         total_files += gen_project.files.len();
     }
 
-    println!(
-        "[OK] Build successful. Generated {} file(s) in '{}'.",
-        total_files,
-        output_dir.display()
-    );
+    if total_files > 0 && verbose {
+        eprintln!("    Rust: {total_files} file(s) written to {}", output_dir.display());
+    }
 
-    Ok(())
+    Ok(total_files)
 }
 
 // ---------------------------------------------------------------------------
@@ -609,31 +731,49 @@ fn cmd_build(
 
 fn cmd_generate(
     entry_file: &Path,
+    target: &str,
     extra_files: &[PathBuf],
     output_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
     if verbose {
-        eprintln!("Loading {}...", entry_file.display());
+        eprintln!("Loading {} (target: {target})...", entry_file.display());
     }
 
-    let (mut loaded, load_diags) = nexflow_compiler::load_project(entry_file)?;
+    // Collect files: either from a single entry file or a directory
+    let (loaded, load_diags) = if entry_file.is_dir() {
+        let mut files = Vec::new();
+        collect_dsl_files_recursive(entry_file, &mut files);
+        if files.is_empty() {
+            return Err(format!(
+                "No DSL files found in '{}'",
+                entry_file.display()
+            ));
+        }
+        nexflow_compiler::load_files(&files)?
+    } else {
+        let mut result = nexflow_compiler::load_project(entry_file)?;
+
+        if !extra_files.is_empty() {
+            if verbose {
+                eprintln!("Loading {} additional file(s)...", extra_files.len());
+            }
+            let (extra, extra_diags) = nexflow_compiler::load_files(extra_files)?;
+            for diag in &extra_diags.diagnostics {
+                eprintln!("{diag}");
+            }
+            result.0.apis.extend(extra.apis);
+            result.0.services.extend(extra.services);
+            result.0.schemas.extend(extra.schemas);
+            result.0.transforms.extend(extra.transforms);
+            result.0.rules.extend(extra.rules);
+            result.0.procs.extend(extra.procs);
+        }
+        result
+    };
 
     for diag in &load_diags.diagnostics {
         eprintln!("{diag}");
-    }
-
-    if !extra_files.is_empty() {
-        if verbose {
-            eprintln!("Loading {} additional file(s)...", extra_files.len());
-        }
-        let (extra, extra_diags) = nexflow_compiler::load_files(extra_files)?;
-        for diag in &extra_diags.diagnostics {
-            eprintln!("{diag}");
-        }
-        loaded.apis.extend(extra.apis);
-        loaded.services.extend(extra.services);
-        loaded.schemas.extend(extra.schemas);
     }
 
     for unresolved in &loaded.unresolved {
@@ -645,20 +785,36 @@ fn cmd_generate(
         }
     }
 
-    let api = loaded
-        .apis
-        .first()
-        .ok_or_else(|| format!("No API definition found (from '{}')", entry_file.display()))?;
+    match target {
+        "java" => {
+            let total = build_java(&loaded, output_dir, verbose)?;
+            println!(
+                "[OK] Generated {} Java file(s) in '{}'.",
+                total,
+                output_dir.display()
+            );
+        }
+        "rust" => {
+            let api = loaded.apis.first().ok_or_else(|| {
+                format!(
+                    "No API definition found (from '{}'). Rust target requires a .api file.",
+                    entry_file.display()
+                )
+            })?;
 
-    let service = loaded.services.first();
+            let service = loaded.services.first();
+            let project = if let Some(svc) = service {
+                nexflow_codegen::generate_with_service(api, &loaded.schemas, svc)?
+            } else {
+                nexflow_codegen::generate(api, &loaded.schemas)?
+            };
 
-    let project = if let Some(svc) = service {
-        nexflow_codegen::generate_with_service(api, &loaded.schemas, svc)?
-    } else {
-        nexflow_codegen::generate(api, &loaded.schemas)?
-    };
+            write_project(&project, output_dir, verbose)?;
+        }
+        _ => return Err(format!("Unknown target: {target}")),
+    }
 
-    write_project(&project, output_dir, verbose)
+    Ok(())
 }
 
 fn write_project(
