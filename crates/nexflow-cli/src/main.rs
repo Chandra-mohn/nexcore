@@ -675,18 +675,19 @@ fn build_java(
     Ok(total)
 }
 
-/// Generate Rust/Axum code from API + Schema + Service DSLs.
+/// Generate Rust code from all loaded DSLs.
+///
+/// - APIs + Schemas + Services -> Axum service (existing)
+/// - Transforms -> pure Rust functions (new)
+/// - Rules -> pure Rust functions (new)
 fn build_rust(
     loaded: &nexflow_compiler::resolve::Project,
     output_dir: &Path,
     verbose: bool,
 ) -> Result<usize, String> {
-    if loaded.apis.is_empty() {
-        return Ok(0);
-    }
+    let mut all_files = std::collections::HashMap::new();
 
-    let mut total_files = 0;
-
+    // Axum services (from .api + .schema + .service)
     for api in &loaded.apis {
         let service = loaded
             .services
@@ -699,30 +700,58 @@ fn build_rust(
             nexflow_codegen::generate(api, &loaded.schemas)?
         };
 
-        let api_output = output_dir.join(nexflow_codegen::naming::pascal_to_snake(&api.name));
-        std::fs::create_dir_all(&api_output)
-            .map_err(|e| format!("Cannot create directory: {e}"))?;
-
-        for (rel_path, content) in &gen_project.files {
-            let full_path = api_output.join(rel_path);
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Cannot create directory: {e}"))?;
-            }
-            std::fs::write(&full_path, content)
-                .map_err(|e| format!("Cannot write '{}': {e}", full_path.display()))?;
-            if verbose {
-                eprintln!("    -> {}", full_path.display());
-            }
+        let api_prefix = nexflow_codegen::naming::pascal_to_snake(&api.name);
+        for (rel_path, content) in gen_project.files {
+            all_files.insert(format!("{api_prefix}/{rel_path}"), content);
         }
-        total_files += gen_project.files.len();
+
+        if verbose {
+            eprintln!("    Axum: {} API -> service", api.name);
+        }
     }
 
-    if total_files > 0 && verbose {
-        eprintln!("    Rust: {total_files} file(s) written to {}", output_dir.display());
+    // Transforms -> pure Rust functions
+    for xform_prog in &loaded.transforms {
+        let (filename, content) =
+            nexflow_codegen::rust::xform::generate_rust_transforms(xform_prog);
+        let count = xform_prog.transforms.len() + xform_prog.transform_blocks.len();
+        all_files.insert(format!("src/{filename}"), content);
+        if verbose {
+            eprintln!("    Xform: {count} transform(s) -> pure Rust functions");
+        }
     }
 
-    Ok(total_files)
+    // Rules -> pure Rust functions
+    for rules_prog in &loaded.rules {
+        let (filename, content) =
+            nexflow_codegen::rust::rules::generate_rust_rules(rules_prog);
+        let count = rules_prog.decision_tables.len() + rules_prog.procedural_rules.len();
+        all_files.insert(format!("src/{filename}"), content);
+        if verbose {
+            eprintln!("    Rules: {count} rule(s) -> pure Rust functions");
+        }
+    }
+
+    // Write all files
+    let total = all_files.len();
+    for (rel_path, content) in &all_files {
+        let full_path = output_dir.join(rel_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Cannot create directory: {e}"))?;
+        }
+        std::fs::write(&full_path, content)
+            .map_err(|e| format!("Cannot write '{}': {e}", full_path.display()))?;
+        if verbose {
+            eprintln!("    -> {}", full_path.display());
+        }
+    }
+
+    if total > 0 && verbose {
+        eprintln!("    Rust: {total} file(s) written to {}", output_dir.display());
+    }
+
+    Ok(total)
 }
 
 // ---------------------------------------------------------------------------
@@ -795,21 +824,12 @@ fn cmd_generate(
             );
         }
         "rust" => {
-            let api = loaded.apis.first().ok_or_else(|| {
-                format!(
-                    "No API definition found (from '{}'). Rust target requires a .api file.",
-                    entry_file.display()
-                )
-            })?;
-
-            let service = loaded.services.first();
-            let project = if let Some(svc) = service {
-                nexflow_codegen::generate_with_service(api, &loaded.schemas, svc)?
-            } else {
-                nexflow_codegen::generate(api, &loaded.schemas)?
-            };
-
-            write_project(&project, output_dir, verbose)?;
+            let total = build_rust(&loaded, output_dir, verbose)?;
+            println!(
+                "[OK] Generated {} Rust file(s) in '{}'.",
+                total,
+                output_dir.display()
+            );
         }
         _ => return Err(format!("Unknown target: {target}")),
     }
@@ -817,35 +837,7 @@ fn cmd_generate(
     Ok(())
 }
 
-fn write_project(
-    project: &nexflow_codegen::GeneratedProject,
-    output_dir: &Path,
-    verbose: bool,
-) -> Result<(), String> {
-    std::fs::create_dir_all(output_dir)
-        .map_err(|e| format!("Cannot create output directory: {e}"))?;
 
-    for (rel_path, content) in &project.files {
-        let full_path = output_dir.join(rel_path);
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Cannot create directory: {e}"))?;
-        }
-        std::fs::write(&full_path, content)
-            .map_err(|e| format!("Cannot write '{}': {e}", full_path.display()))?;
-        if verbose {
-            eprintln!("  wrote {}", full_path.display());
-        }
-    }
-
-    println!(
-        "[OK] Generated {} file(s) in '{}'.",
-        project.files.len(),
-        output_dir.display()
-    );
-
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // init

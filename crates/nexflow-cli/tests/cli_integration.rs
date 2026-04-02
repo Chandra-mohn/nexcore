@@ -308,13 +308,14 @@ fn test_generate_output() {
         String::from_utf8_lossy(&output.stdout)
     );
 
-    // Verify output files
-    assert!(output_dir.join("src/models.rs").exists());
-    assert!(output_dir.join("src/errors.rs").exists());
-    assert!(output_dir.join("src/handlers.rs").exists());
-    assert!(output_dir.join("Cargo.toml").exists());
+    // Verify output files (Axum service under account_a_p_i/)
+    let api_dir = output_dir.join("account_a_p_i");
+    assert!(api_dir.join("src/models.rs").exists());
+    assert!(api_dir.join("src/errors.rs").exists());
+    assert!(api_dir.join("src/handlers.rs").exists());
+    assert!(api_dir.join("Cargo.toml").exists());
 
-    let models = std::fs::read_to_string(output_dir.join("src/models.rs")).unwrap();
+    let models = std::fs::read_to_string(api_dir.join("src/models.rs")).unwrap();
     assert!(models.contains("pub struct AccountDetail"));
 
     let stdout = String::from_utf8_lossy(&output.stdout);

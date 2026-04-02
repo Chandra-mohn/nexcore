@@ -24,6 +24,7 @@ pub mod gen_schema;
 pub mod gen_service;
 pub mod java;
 pub mod naming;
+pub mod rust;
 pub mod types;
 
 use std::collections::HashMap;
