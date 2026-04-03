@@ -540,6 +540,178 @@ conversion back to DataStream.
 
 ---
 
+## MAJOR GAP: Spark / Batch Code Generation
+
+This is not a feature gap within the Flink codegen -- it's an **entirely missing code
+generation target**. The grammar explicitly defines batch processing capabilities that
+map to Apache Spark, not Flink.
+
+### What the Grammar Defines
+
+**Execution mode:**
+```
+process daily_settlement
+    mode batch
+    ...
+end
+
+process near_realtime_aggregation
+    mode micro_batch 30 seconds
+    ...
+end
+```
+
+Three modes: `stream` (Flink), `batch` (Spark), `micro_batch` (Spark Structured Streaming).
+
+**Batch-oriented sources:**
+```
+receive historical_data from source into records
+    from parquet "/data/lake/transactions/year=2025/"
+        partition_by year, month
+        schema_path "schemas/transaction.avsc"
+
+receive csv_import from source into raw
+    from csv "/data/imports/accounts.csv"
+        delimiter ","
+        quote "\""
+        header true
+        null_value ""
+```
+
+Parquet with partition pruning and external schema. CSV with full parsing options.
+These are inherently batch sources -- Flink handles them but Spark is the natural fit.
+
+**Bounded Kafka reads:**
+```
+receive events from source into bounded_stream
+    from kafka "events"
+        from timestamp "2025-01-01T00:00:00Z" to timestamp "2025-12-31T23:59:59Z"
+```
+
+Time-bounded Kafka consumption for historical replay/backfill -- a Spark batch pattern.
+
+**SQL for analytics:**
+```
+sql ```
+    SELECT
+        account_id,
+        date_trunc('month', txn_date) as month,
+        SUM(amount) as total,
+        COUNT(*) as txn_count,
+        AVG(amount) as avg_amount
+    FROM transactions
+    WHERE status = 'completed'
+    GROUP BY account_id, date_trunc('month', txn_date)
+    HAVING SUM(amount) > 10000
+``` as MonthlyAccountSummary
+```
+
+While Flink SQL exists, complex analytical SQL with GROUP BY, HAVING, window functions,
+and CTEs is Spark SQL territory. Spark SQL is the production standard for batch analytics.
+
+**MongoDB persistence:**
+```
+emit results to output
+    to mongodb "analytics_db"
+        persist to monthly_summaries async
+            batch size 1000
+            flush interval 30 seconds
+```
+
+Batch writes with configurable batch size -- more natural in Spark's `foreachBatch` than
+Flink's streaming sinks.
+
+### What Would Need to Be Generated
+
+**For `mode batch` -> Spark Job:**
+
+```java
+public class DailySettlementJob {
+    public static void main(String[] args) {
+        SparkSession spark = SparkSession.builder()
+            .appName("daily_settlement")
+            .getOrCreate();
+
+        // Source: Parquet with partition pruning
+        Dataset<Row> transactions = spark.read()
+            .parquet("/data/lake/transactions/")
+            .filter(col("year").equalTo(2025));
+
+        // Transform: reuse L3 transform logic (same business functions)
+        Dataset<Row> enriched = transactions
+            .map(new EnrichTransactionFunction(), encoder);
+
+        // SQL: analytical aggregation
+        enriched.createOrReplaceTempView("transactions");
+        Dataset<Row> summary = spark.sql(
+            "SELECT account_id, SUM(amount) as total ... "
+        );
+
+        // Sink: write to Parquet/MongoDB
+        summary.write()
+            .mode(SaveMode.Overwrite)
+            .partitionBy("year", "month")
+            .parquet("/data/lake/summaries/");
+
+        spark.stop();
+    }
+}
+```
+
+**For `mode micro_batch` -> Spark Structured Streaming:**
+
+```java
+Dataset<Row> stream = spark.readStream()
+    .format("kafka")
+    .option("subscribe", "events")
+    .load();
+
+StreamingQuery query = stream
+    .map(new TransformFunction(), encoder)
+    .writeStream()
+    .trigger(Trigger.ProcessingTime("30 seconds"))
+    .format("parquet")
+    .start();
+```
+
+### Scope of the Gap
+
+| Aspect | Flink (Streaming) | Spark (Batch) | Status |
+|--------|-------------------|---------------|--------|
+| Grammar support | `mode stream` | `mode batch`, `mode micro_batch` | Grammar: YES |
+| CLI target | `--target java` generates Flink | No Spark target exists | CLI: NO |
+| Job class | `*Job.java` with `StreamExecutionEnvironment` | Need `*SparkJob.java` with `SparkSession` | Codegen: NO |
+| Source connectors | `KafkaSource` | `spark.read().parquet()`, `.csv()`, `.format("kafka")` | Codegen: NO |
+| Sink connectors | `KafkaSink` | `dataset.write().parquet()`, `.format("mongo")` | Codegen: NO |
+| SQL integration | Flink SQL (limited) | Spark SQL (full analytical SQL) | Codegen: NO |
+| Transform reuse | L3 `MapFunction` | L3 logic reusable as Spark `MapFunction` | Partial |
+| Rules reuse | L4 `Table.evaluate()` | L4 logic reusable as-is (pure Java) | Partial |
+| Dependencies | flink-core, flink-kafka | spark-core, spark-sql, spark-avro | None |
+
+### Key Insight: L3/L4 Logic is Reusable
+
+The transform functions (L3) and decision tables (L4) are **pure Java logic** that
+doesn't depend on Flink. A Spark job can call `new NormalizeOrderFunction().map(record)`
+or `new CreditScoringTable().evaluate(input)` directly. The business logic doesn't need
+to be regenerated -- only the **job orchestration** (sources, sinks, SQL, DAG) changes.
+
+This means Spark codegen is primarily:
+1. `*SparkJob.java` class generation (parallel to `*Job.java` for Flink)
+2. Source/sink connector generation for Spark APIs
+3. SQL block integration via `spark.sql()`
+4. CLI `--target spark` or detecting `mode batch` and switching generators
+
+### Rust Batch Equivalent
+
+For the Rust target, the batch equivalent would be:
+- DataFusion (SQL engine, Arrow-native)
+- Polars (DataFrame library, fast batch processing)
+- Both are listed in the codegen strategy as candidates
+
+This is a separate gap from the Rust streaming runtime (tokio + rdkafka).
+
+---
+
 ## Implementation Roadmap
 
 Ordered by dependency (later phases depend on earlier ones):
@@ -560,3 +732,17 @@ Ordered by dependency (later phases depend on earlier ones):
 | **L** | Observability (metrics, audit events, state transitions) | E |
 | **M** | Connectors (MongoDB, Redis, Parquet, CSV, scheduler, state_store) | A |
 | **N** | Embedded SQL (Flink SQL integration) | A |
+| **O** | **Spark batch codegen** (SparkJob, Parquet/CSV sources, Spark SQL, batch sinks) | B, M |
+| **P** | **Spark Structured Streaming** (micro_batch mode, readStream/writeStream) | O |
+
+### Target Matrix After All Phases
+
+| DSL | Java/Flink (stream) | Java/Spark (batch) | Rust |
+|-----|---------------------|--------------------|------|
+| `.schema` | .avsc + helpers | .avsc + helpers (shared) | serde structs |
+| `.xform` | MapFunction | Spark MapFunction (reuse L3 logic) | pure functions |
+| `.rules` | Decision tables | Decision tables (reuse L4 logic) | pure functions |
+| `.proc` mode stream | Flink Job | -- | tokio+rdkafka (backlog) |
+| `.proc` mode batch | -- | Spark Job | DataFusion/Polars (backlog) |
+| `.proc` mode micro_batch | -- | Structured Streaming Job | -- |
+| `.proc` sql blocks | Flink SQL | Spark SQL | DataFusion SQL (backlog) |
