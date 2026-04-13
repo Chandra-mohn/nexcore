@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # -- Configuration -----------------------------------------------------------
-CR="${CR:-$(dirname "$0")/../RustBuild/cobol2rust-target/release/cobol2rust}"
+CR="${CR:-$(dirname "$0")/../RustBuild/nexcore-target/release/nexmig}"
 OUTDIR="/tmp/monster-debug"
 INPUT="${1:?Usage: $0 <COBOL_FILE> [FLAGS...]}"
 shift

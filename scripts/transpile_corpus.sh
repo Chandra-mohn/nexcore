@@ -2,7 +2,7 @@
 # transpile_corpus.sh -- Transpile a multi-repo COBOL corpus
 #
 # Walks repos/{github,software_heritage}/*/ treating each subdirectory
-# as an independent workspace. Runs cobol2rust transpile --workspace on
+# as an independent workspace. Runs nexmig transpile --workspace on
 # each, with parallel transpilation within each repo.
 #
 # Produces:
@@ -21,10 +21,10 @@ REPOS_DIR="${1:?Usage: $0 <repos_dir> <output_root> [jobs]}"
 OUTPUT_ROOT="${2:?Usage: $0 <repos_dir> <output_root> [jobs]}"
 JOBS="${3:-$(nproc)}"
 
-# Locate cobol2rust binary (prefer local build, fall back to PATH)
-COBOL2RUST="${COBOL2RUST:-$(command -v cobol2rust 2>/dev/null || echo "")}"
-if [ -z "$COBOL2RUST" ]; then
-    echo "ERROR: cobol2rust not found. Set COBOL2RUST env var or add to PATH."
+# Locate nexmig binary (prefer local build, fall back to PATH, then legacy cobol2rust)
+NEXMIG="${NEXMIG:-$(command -v nexmig 2>/dev/null || command -v cobol2rust 2>/dev/null || echo "")}"
+if [ -z "$NEXMIG" ]; then
+    echo "ERROR: nexmig not found. Set NEXMIG env var or add to PATH."
     exit 1
 fi
 
@@ -53,7 +53,7 @@ log "Starting corpus transpile"
 log "  repos_dir:   $REPOS_DIR"
 log "  output_root: $OUTPUT_ROOT"
 log "  jobs:        $JOBS"
-log "  cobol2rust:  $COBOL2RUST"
+log "  nexmig:      $NEXMIG"
 log ""
 
 # Discover repo directories (any dir under repos_dir that contains .cbl/.cob files)
@@ -109,7 +109,7 @@ for repo_dir in "${REPO_DIRS[@]}"; do
 
     # Run transpile (capture stderr for error reporting)
     REPO_ERR=$(mktemp)
-    if "$COBOL2RUST" transpile "$repo_dir" \
+    if "$NEXMIG" transpile "$repo_dir" \
         --workspace \
         --output "$repo_output" \
         -j "$JOBS" \
@@ -194,5 +194,5 @@ log "Output:          $OUTPUT_ROOT"
 log "Merged reports:  $MERGED_REPORTS"
 log ""
 log "To view reports:"
-log "  cobol2rust report --scan-dir $MERGED_REPORTS --type transpile"
-log "  cobol2rust report --scan-dir $MERGED_REPORTS --type transpile --format json"
+log "  nexmig report --scan-dir $MERGED_REPORTS --type transpile"
+log "  nexmig report --scan-dir $MERGED_REPORTS --type transpile --format json"

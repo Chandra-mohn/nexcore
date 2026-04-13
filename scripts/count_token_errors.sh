@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # count_token_errors.sh -- Count token recognition errors by token value.
-# Usage: cobol2rust check ./cobol/abc.cbl -C ./cobol 2>&1 | ./scripts/count_token_errors.sh
+# Usage: nexmig check ./cobol/abc.cbl -C ./cobol 2>&1 | ./scripts/count_token_errors.sh
 #   or:  ./scripts/count_token_errors.sh < logfile.txt
 
 grep "token recognition error at:" | \

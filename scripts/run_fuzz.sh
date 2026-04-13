@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run all cobol2rust fuzz targets for a given number of iterations.
+# Run all nexmig fuzz targets for a given number of iterations.
 # Usage: scripts/run_fuzz.sh [iterations]
 set -euo pipefail
 

@@ -19,7 +19,7 @@ set -euo pipefail
 RAMDISK_NAME="RustBuild"
 RAMDISK_SIZE_GB=8
 RAMDISK_MOUNT="/Volumes/${RAMDISK_NAME}"
-TARGET_SUBDIR="cobol2rust-target"
+TARGET_SUBDIR="nexcore-target"
 
 # Colors (ASCII-safe)
 RED='\033[0;31m'
@@ -184,7 +184,7 @@ main() {
     echo ""
     echo "========================================"
     echo "  Rust Development Environment Setup"
-    echo "  (cobol2rust project)"
+    echo "  (nexcore project)"
     echo "========================================"
     echo ""
 

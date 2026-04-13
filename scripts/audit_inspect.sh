@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit_inspect.sh -- Interactive investigator for cobol2rust audit JSON reports.
+# audit_inspect.sh -- Interactive investigator for nexmig audit JSON reports.
 # Usage: ./scripts/audit_inspect.sh <audit_report.json>
 
 set -euo pipefail
@@ -20,7 +20,7 @@ fi
 show_menu() {
     echo ""
     echo "=========================================="
-    echo "  cobol2rust Audit Report Inspector"
+    echo "  NexMig Audit Report Inspector"
     echo "=========================================="
     echo ""
     echo "  1) Summary              -- scores and phase counts"

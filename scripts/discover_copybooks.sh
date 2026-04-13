@@ -1,5 +1,5 @@
 #!/bin/bash
-# discover_copybooks.sh -- Discover copybook locations per repo and write .cobol2rust.toml
+# discover_copybooks.sh -- Discover copybook locations per repo and write .nexmig.toml
 #
 # Scans each repo under <repos_dir>/<source>/<repo>/ and identifies copybook
 # directories using multiple heuristics:
@@ -9,7 +9,7 @@
 #      (i.e., they are data-only copybooks, not full programs)
 #   4. Directories referenced by COPY statements in the source files
 #
-# Produces a .cobol2rust.toml in each repo root with discovered copy_paths.
+# Produces a .nexmig.toml in each repo root with discovered copy_paths.
 #
 # Usage:
 #   ./scripts/discover_copybooks.sh <repos_dir> [--dry-run] [--force]
@@ -17,7 +17,7 @@
 # Example:
 #   ./scripts/discover_copybooks.sh repos/
 #   ./scripts/discover_copybooks.sh repos/ --dry-run
-#   ./scripts/discover_copybooks.sh repos/ --force   # overwrite existing .cobol2rust.toml
+#   ./scripts/discover_copybooks.sh repos/ --force   # overwrite existing .nexmig.toml
 
 set -euo pipefail
 
@@ -152,10 +152,10 @@ discover_repo() {
     toml="$toml]"
 
     if $DRY_RUN; then
-        echo "  Would write .cobol2rust.toml:"
+        echo "  Would write .nexmig.toml:"
         echo -e "  $toml"
     else
-        echo -e "$toml" > "${repo_dir}/.cobol2rust.toml"
+        echo -e "$toml" > "${repo_dir}/.nexmig.toml"
     fi
 
     return 0
@@ -177,8 +177,8 @@ for source_dir in "$REPOS_DIR"/*/; do
         rel_path="${repo_dir#"$REPOS_DIR"/}"
         rel_path="${rel_path%/}"
 
-        # Skip if .cobol2rust.toml already exists (unless --force)
-        if [ -f "${repo_dir}/.cobol2rust.toml" ] && ! $FORCE; then
+        # Skip if .nexmig.toml already exists (unless --force)
+        if [ -f "${repo_dir}/.nexmig.toml" ] && ! $FORCE; then
             REPOS_SKIPPED=$((REPOS_SKIPPED + 1))
             continue
         fi
