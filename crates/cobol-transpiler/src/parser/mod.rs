@@ -389,13 +389,13 @@ pub fn parse_procedure_division(source: &str) -> Result<Option<ProcedureDivision
     }))
 }
 
-/// Extract DATA DIVISION text from source and wrap in a minimal program skeleton.
+/// Extract raw DATA DIVISION text from source (without program wrapper).
 ///
 /// Includes FILE SECTION records (needed so FD record fields appear in the
 /// data listener output), WORKING-STORAGE, LOCAL-STORAGE, and LINKAGE.
 /// Starts from whichever comes first: FILE SECTION, WORKING-STORAGE, or
 /// LINKAGE SECTION. Ends at PROCEDURE DIVISION (or end of source).
-fn extract_data_division_source(source: &str) -> Option<String> {
+fn extract_data_division_text(source: &str) -> Option<String> {
     let upper = source.to_uppercase();
 
     // Find the earliest data section start
@@ -411,11 +411,121 @@ fn extract_data_division_source(source: &str) -> Option<String> {
 
     // Find the end: PROCEDURE DIVISION or end of source.
     let end_pos = upper.find("PROCEDURE DIVISION").unwrap_or(source.len());
-    let data_text = &source[line_start..end_pos];
 
-    Some(format!(
-        "IDENTIFICATION DIVISION.\nPROGRAM-ID. ISOLATED-DATA.\nDATA DIVISION.\n{data_text}\nPROCEDURE DIVISION.\n    STOP RUN.\n"
-    ))
+    Some(source[line_start..end_pos].to_string())
+}
+
+/// Split DATA DIVISION text into chunks at 01/77-level boundaries.
+///
+/// Each chunk contains up to `batch_size` top-level records (01 or 77-level
+/// entries) with all their subordinate items (levels 02-49, 66, 88).
+/// Section headers (WORKING-STORAGE, LINKAGE, LOCAL-STORAGE) force a new chunk.
+fn split_data_division_into_chunks(data_text: &str, batch_size: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current_chunk = String::new();
+    let mut top_level_count: usize = 0;
+
+    for line in data_text.lines() {
+        let trimmed = line.trim_start();
+        let upper = trimmed.to_uppercase();
+
+        // Section headers always force a new chunk
+        if upper.starts_with("WORKING-STORAGE SECTION")
+            || upper.starts_with("LINKAGE SECTION")
+            || upper.starts_with("LOCAL-STORAGE SECTION")
+            || upper.starts_with("FILE SECTION")
+        {
+            if !current_chunk.trim().is_empty() {
+                chunks.push(std::mem::take(&mut current_chunk));
+            }
+            top_level_count = 0;
+            current_chunk.push_str(line);
+            current_chunk.push('\n');
+            continue;
+        }
+
+        // 01 or 77 level starts a new top-level record
+        let is_top_level = trimmed.starts_with("01 ") || trimmed.starts_with("01\t")
+            || trimmed.starts_with("77 ") || trimmed.starts_with("77\t");
+
+        if is_top_level {
+            if top_level_count >= batch_size && !current_chunk.trim().is_empty() {
+                chunks.push(std::mem::take(&mut current_chunk));
+                top_level_count = 0;
+            }
+            top_level_count += 1;
+        }
+
+        current_chunk.push_str(line);
+        current_chunk.push('\n');
+    }
+
+    // Flush remaining
+    if !current_chunk.trim().is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    chunks
+}
+
+/// Wrap a DATA DIVISION text chunk in a minimal COBOL program skeleton
+/// so ANTLR4 can parse it via `startRule`.
+fn wrap_chunk_as_program(chunk: &str) -> String {
+    let upper = chunk.trim_start().to_uppercase();
+    let needs_section = !upper.starts_with("WORKING-STORAGE SECTION")
+        && !upper.starts_with("LINKAGE SECTION")
+        && !upper.starts_with("LOCAL-STORAGE SECTION")
+        && !upper.starts_with("FILE SECTION");
+
+    let section_prefix = if needs_section {
+        "WORKING-STORAGE SECTION.\n"
+    } else {
+        ""
+    };
+
+    format!(
+        "IDENTIFICATION DIVISION.\nPROGRAM-ID. CHUNK.\nDATA DIVISION.\n{section_prefix}{chunk}\nPROCEDURE DIVISION.\n    STOP RUN.\n"
+    )
+}
+
+/// Parse DATA DIVISION by splitting into chunks at 01-level boundaries.
+///
+/// Each chunk is wrapped in a program skeleton and parsed independently.
+/// Returns merged flat items (before hierarchy building).
+fn parse_data_chunks(data_text: &str, batch_size: usize) -> Vec<DataEntry> {
+    let chunks = split_data_division_into_chunks(data_text, batch_size);
+    let total_chunks = chunks.len();
+    let mut all_items: Vec<DataEntry> = Vec::new();
+    let mut success_count = 0;
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let wrapped = wrap_chunk_as_program(chunk);
+        match run_data_listener(&wrapped) {
+            Ok(listener) => {
+                for d in &listener.diagnostics {
+                    eprintln!("  [{severity}] {cat}: {msg}",
+                        severity = d.severity, cat = d.category, msg = d.message);
+                }
+                all_items.extend(listener.items);
+                success_count += 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "[WARN] DATA DIVISION chunk {}/{total_chunks} parse failed: {e}",
+                    i + 1,
+                );
+            }
+        }
+    }
+
+    if total_chunks > 1 {
+        eprintln!(
+            "[INFO] Parsed {success_count}/{total_chunks} DATA DIVISION chunks, {} total fields",
+            all_items.len(),
+        );
+    }
+
+    all_items
 }
 
 /// Extract FILE SECTION text (from FILE SECTION through WORKING-STORAGE or
@@ -452,30 +562,28 @@ fn extract_file_section_source(source: &str) -> Option<String> {
     ))
 }
 
-/// Attempt to parse DATA DIVISION in isolation when the full-source parse
-/// produces 0 data entries.
+/// Parse DATA DIVISION in isolation using chunked parsing.
+///
+/// Extracts DATA DIVISION text, splits at 01-level boundaries into chunks
+/// of ~100 top-level records each, parses each chunk independently, and
+/// merges results. This handles monster files (100K+ line DATA DIVISIONs)
+/// where ANTLR4 silently truncates output on very large inputs.
 fn parse_data_division_isolated(source: &str) -> Vec<DataEntry> {
-    let isolated = match extract_data_division_source(source) {
+    let data_text = match extract_data_division_text(source) {
         Some(s) => s,
         None => return Vec::new(),
     };
 
-    match run_data_listener(&isolated) {
-        Ok(listener) => {
-            for d in &listener.diagnostics {
-                eprintln!("  [{severity}] {cat}: {msg}", severity = d.severity, cat = d.category, msg = d.message);
-            }
-            let mut records = build_hierarchy(listener.items);
-            for record in &mut records {
-                compute_layout(record);
-            }
-            records
-        }
-        Err(e) => {
-            eprintln!("[WARN] Isolated DATA DIVISION parse failed: {e}");
-            Vec::new()
-        }
+    let flat_items = parse_data_chunks(&data_text, 100);
+    if flat_items.is_empty() {
+        return Vec::new();
     }
+
+    let mut records = build_hierarchy(flat_items);
+    for record in &mut records {
+        compute_layout(record);
+    }
+    records
 }
 
 /// Attempt to parse FILE SECTION in isolation when the full-source parse
@@ -1184,5 +1292,121 @@ mod tests {
         assert!(result.is_ok());
         let program = result.unwrap();
         assert!(program.exec_sql_statements.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Chunked DATA DIVISION parsing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn split_chunks_basic() {
+        let data = "\
+WORKING-STORAGE SECTION.
+01  REC-A.
+    05  FIELD-A PIC X(10).
+01  REC-B.
+    05  FIELD-B PIC 9(5).
+01  REC-C.
+    05  FIELD-C PIC X(20).
+01  REC-D.
+    05  FIELD-D PIC 9(3).
+01  REC-E.
+    05  FIELD-E PIC X(5).
+";
+        let chunks = split_data_division_into_chunks(data, 2);
+        // batch_size=2: chunk1=[WS SECTION + REC-A + REC-B], chunk2=[REC-C + REC-D], chunk3=[REC-E]
+        assert_eq!(chunks.len(), 3, "5 01-levels with batch=2 should produce 3 chunks");
+        assert!(chunks[0].contains("REC-A"), "chunk 0 should have REC-A");
+        assert!(chunks[0].contains("REC-B"), "chunk 0 should have REC-B");
+        assert!(chunks[1].contains("REC-C"), "chunk 1 should have REC-C");
+        assert!(chunks[1].contains("REC-D"), "chunk 1 should have REC-D");
+        assert!(chunks[2].contains("REC-E"), "chunk 2 should have REC-E");
+    }
+
+    #[test]
+    fn split_chunks_section_boundary() {
+        let data = "\
+WORKING-STORAGE SECTION.
+01  WS-REC PIC X(10).
+LINKAGE SECTION.
+01  LS-REC PIC X(20).
+";
+        let chunks = split_data_division_into_chunks(data, 100);
+        assert_eq!(chunks.len(), 2, "LINKAGE SECTION should force a new chunk");
+        assert!(chunks[0].contains("WS-REC"), "chunk 0 should have WS-REC");
+        assert!(chunks[1].contains("LS-REC"), "chunk 1 should have LS-REC");
+        assert!(chunks[1].contains("LINKAGE SECTION"), "chunk 1 should have LINKAGE header");
+    }
+
+    #[test]
+    fn split_chunks_subordinates_stay() {
+        let data = "\
+WORKING-STORAGE SECTION.
+01  REC-A.
+    05  FIELD-A1 PIC X(10).
+    10  FIELD-A2 PIC 9(3).
+    88  FLAG-YES VALUE 'Y'.
+01  REC-B.
+    05  FIELD-B1 PIC X(5).
+    66  RENAMED RENAMES FIELD-B1.
+";
+        let chunks = split_data_division_into_chunks(data, 1);
+        // batch_size=1: each 01-level in its own chunk (+ WS SECTION in first)
+        assert_eq!(chunks.len(), 2, "2 01-levels with batch=1 should produce 2 chunks");
+        assert!(chunks[0].contains("FIELD-A1"), "subordinate 05 stays with parent");
+        assert!(chunks[0].contains("FIELD-A2"), "subordinate 10 stays with parent");
+        assert!(chunks[0].contains("FLAG-YES"), "subordinate 88 stays with parent");
+        assert!(chunks[1].contains("FIELD-B1"), "second record in chunk 1");
+        assert!(chunks[1].contains("RENAMED"), "subordinate 66 stays with parent");
+    }
+
+    #[test]
+    fn wrap_chunk_with_section() {
+        let chunk = "WORKING-STORAGE SECTION.\n01  REC PIC X(5).\n";
+        let wrapped = wrap_chunk_as_program(chunk);
+        assert!(wrapped.contains("IDENTIFICATION DIVISION"), "has ID division");
+        assert!(wrapped.contains("PROCEDURE DIVISION"), "has PROC division");
+        // Should NOT duplicate WORKING-STORAGE SECTION
+        assert_eq!(
+            wrapped.matches("WORKING-STORAGE SECTION").count(),
+            1,
+            "should not duplicate section header"
+        );
+    }
+
+    #[test]
+    fn wrap_chunk_without_section() {
+        let chunk = "01  REC PIC X(5).\n";
+        let wrapped = wrap_chunk_as_program(chunk);
+        assert!(wrapped.contains("WORKING-STORAGE SECTION"), "adds WS section header");
+        assert!(wrapped.contains("IDENTIFICATION DIVISION"), "has ID division");
+    }
+
+    #[test]
+    fn parse_chunks_end_to_end() {
+        let source = "\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CHUNKTEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-REC-A.
+           05  WS-FIELD-A PIC X(10).
+       01  WS-REC-B.
+           05  WS-FIELD-B PIC 9(5).
+       01  WS-REC-C.
+           05  WS-FIELD-C PIC X(20).
+       01  WS-REC-D.
+           05  WS-FIELD-D PIC 9(3).
+       PROCEDURE DIVISION.
+           STOP RUN.
+";
+        let data_text = extract_data_division_text(source).unwrap();
+        let items = parse_data_chunks(&data_text, 2);
+
+        // Should find all 4 01-level records + their 05-level children = 8 items
+        let top_levels = items.iter().filter(|e| e.level == 1).count();
+        let sub_levels = items.iter().filter(|e| e.level == 5).count();
+        assert_eq!(top_levels, 4, "should find all 4 01-level records");
+        assert_eq!(sub_levels, 4, "should find all 4 05-level fields");
     }
 }
