@@ -1,0 +1,12 @@
+      * Test: MOVE PIC 9(5) VALUE 12345 to PIC 9(3) left-truncation. Expected output: 345
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MOVE-NUMERIC-LEFT-TRUNCATE-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-SRC PIC 9(5) VALUE 12345.
+       01 WS-DST PIC 9(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE WS-SRC TO WS-DST
+           DISPLAY WS-DST
+           STOP RUN.

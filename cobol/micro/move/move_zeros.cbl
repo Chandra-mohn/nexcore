@@ -1,0 +1,11 @@
+      * Test: MOVE ZEROS to PIC 9(5). Expected output: 00000
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MOVE-ZEROS-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-DST PIC 9(5) VALUE 12345.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE ZEROS TO WS-DST
+           DISPLAY WS-DST
+           STOP RUN.

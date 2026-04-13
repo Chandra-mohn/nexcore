@@ -1,0 +1,801 @@
+//! Top-level transpilation entry point.
+//!
+//! Orchestrates: parse -> resolve symbols -> generate Rust code.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use crate::codegen::data_gen::{generate_linkage_section, generate_working_storage};
+use crate::codegen::proc_gen::{build_condition_map, generate_procedure_division};
+use crate::codegen::rust_writer::RustWriter;
+use crate::diagnostics::{TranspileResult, TranspileStats};
+use crate::error::Result;
+use crate::parser::copy_expand::CopyExpander;
+use crate::parser::copybook::FileSystemResolver;
+use crate::parser::{parse_cobol, parse_cobol_with_diagnostics};
+
+/// Transpile COBOL source code to Rust source code.
+///
+/// Takes raw COBOL source (fixed or free format) and returns
+/// a complete Rust source file that depends on `cobol_runtime::prelude::*`.
+///
+/// # Errors
+///
+/// Returns `TranspileError` if parsing or code generation fails.
+pub fn transpile(source: &str) -> Result<String> {
+    let program = parse_cobol(source)?;
+    generate_rust(&program)
+}
+
+/// Transpile COBOL source code to Rust, returning diagnostics and coverage stats.
+///
+/// Like `transpile()`, but returns a `TranspileResult` with diagnostics
+/// for unhandled statements, parse issues, and coverage statistics.
+pub fn transpile_with_diagnostics(source: &str) -> Result<TranspileResult> {
+    let (program, diagnostics) = parse_cobol_with_diagnostics(source)?;
+    let code = generate_rust(&program)?;
+
+    // Count total statements vs mapped (those without diagnostics)
+    let total_statements = count_statements(&program);
+    let unhandled_count = diagnostics
+        .iter()
+        .filter(|d| d.category == crate::diagnostics::DiagCategory::UnhandledStatement)
+        .count();
+
+    // Collect verb usage from the AST
+    let mut verbs_used = std::collections::HashSet::new();
+    collect_verbs(&program, &mut verbs_used);
+
+    // Extract unsupported verbs from diagnostics
+    let mut verbs_unsupported = std::collections::HashSet::new();
+    for d in &diagnostics {
+        if d.category == crate::diagnostics::DiagCategory::UnhandledStatement {
+            if let Some(verb) = d.message.strip_prefix("Unhandled COBOL statement: ") {
+                verbs_unsupported.insert(verb.to_string());
+            }
+        }
+    }
+
+    let stats = TranspileStats {
+        total_statements,
+        mapped_statements: total_statements.saturating_sub(unhandled_count),
+        total_data_entries: program
+            .data_division
+            .as_ref()
+            .map_or(0, |dd| count_data_entries(&dd.working_storage)),
+        verbs_used,
+        verbs_unsupported,
+    };
+
+    Ok(TranspileResult::success(code, diagnostics, stats))
+}
+
+/// Count total statement contexts in the procedure division.
+fn count_statements(program: &crate::ast::CobolProgram) -> usize {
+    let Some(ref pd) = program.procedure_division else {
+        return 0;
+    };
+    let mut count = 0;
+    for section in &pd.sections {
+        for para in &section.paragraphs {
+            for sentence in &para.sentences {
+                count += count_stmts_recursive(&sentence.statements);
+            }
+        }
+    }
+    for para in &pd.paragraphs {
+        for sentence in &para.sentences {
+            count += count_stmts_recursive(&sentence.statements);
+        }
+    }
+    count
+}
+
+/// Count statements recursively (including nested IF/EVALUATE/PERFORM bodies).
+fn count_stmts_recursive(stmts: &[crate::ast::Statement]) -> usize {
+    let mut count = 0;
+    for stmt in stmts {
+        count += 1;
+        match stmt {
+            crate::ast::Statement::If(if_stmt) => {
+                count += count_stmts_recursive(&if_stmt.then_body);
+                count += count_stmts_recursive(&if_stmt.else_body);
+            }
+            crate::ast::Statement::Evaluate(eval) => {
+                for branch in &eval.when_branches {
+                    count += count_stmts_recursive(&branch.body);
+                }
+                count += count_stmts_recursive(&eval.when_other);
+            }
+            crate::ast::Statement::Perform(perf) => {
+                count += count_stmts_recursive(&perf.body);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// Count data entries recursively.
+fn count_data_entries(entries: &[crate::ast::DataEntry]) -> usize {
+    entries
+        .iter()
+        .map(|e| 1 + count_data_entries(&e.children))
+        .sum()
+}
+
+/// Collect verb names from the AST's procedure division.
+pub fn collect_verbs(
+    program: &crate::ast::CobolProgram,
+    verbs: &mut std::collections::HashSet<String>,
+) {
+    let Some(ref pd) = program.procedure_division else {
+        return;
+    };
+    for section in &pd.sections {
+        for para in &section.paragraphs {
+            for sentence in &para.sentences {
+                collect_verbs_recursive(&sentence.statements, verbs);
+            }
+        }
+    }
+    for para in &pd.paragraphs {
+        for sentence in &para.sentences {
+            collect_verbs_recursive(&sentence.statements, verbs);
+        }
+    }
+}
+
+/// Extract verb name from a Statement and recurse into nested bodies.
+fn collect_verbs_recursive(
+    stmts: &[crate::ast::Statement],
+    verbs: &mut std::collections::HashSet<String>,
+) {
+    use crate::ast::Statement;
+    for stmt in stmts {
+        let verb = match stmt {
+            Statement::Move(_) => "MOVE",
+            Statement::Display(_) => "DISPLAY",
+            Statement::Accept(_) => "ACCEPT",
+            Statement::Compute(_) => "COMPUTE",
+            Statement::Add(_) => "ADD",
+            Statement::Subtract(_) => "SUBTRACT",
+            Statement::Multiply(_) => "MULTIPLY",
+            Statement::Divide(_) => "DIVIDE",
+            Statement::If(_) => "IF",
+            Statement::Evaluate(_) => "EVALUATE",
+            Statement::Perform(_) => "PERFORM",
+            Statement::GoTo(_) => "GO TO",
+            Statement::Call(_) => "CALL",
+            Statement::Cancel(_) => "CANCEL",
+            Statement::Open(_) => "OPEN",
+            Statement::Close(_) => "CLOSE",
+            Statement::Read(_) => "READ",
+            Statement::Write(_) => "WRITE",
+            Statement::Rewrite(_) => "REWRITE",
+            Statement::Delete(_) => "DELETE",
+            Statement::Start(_) => "START",
+            Statement::Sort(_) => "SORT",
+            Statement::Merge(_) => "MERGE",
+            Statement::Release(_) => "RELEASE",
+            Statement::Return(_) => "RETURN",
+            Statement::String(_) => "STRING",
+            Statement::Unstring(_) => "UNSTRING",
+            Statement::Inspect(_) => "INSPECT",
+            Statement::Initialize(_) => "INITIALIZE",
+            Statement::Set(_) => "SET",
+            Statement::StopRun => "STOP RUN",
+            Statement::GoBack => "GOBACK",
+            Statement::Continue => "CONTINUE",
+            Statement::ExitProgram => "EXIT PROGRAM",
+            Statement::ExitParagraph => "EXIT PARAGRAPH",
+            Statement::ExitSection => "EXIT SECTION",
+            Statement::NextSentence => "NEXT SENTENCE",
+            Statement::ExecSql(_) => "EXEC SQL",
+            Statement::Alter(_) => "ALTER",
+        };
+        verbs.insert(verb.to_string());
+
+        // Recurse into nested bodies
+        match stmt {
+            Statement::If(s) => {
+                collect_verbs_recursive(&s.then_body, verbs);
+                collect_verbs_recursive(&s.else_body, verbs);
+            }
+            Statement::Evaluate(s) => {
+                for branch in &s.when_branches {
+                    collect_verbs_recursive(&branch.body, verbs);
+                }
+                collect_verbs_recursive(&s.when_other, verbs);
+            }
+            Statement::Perform(s) => {
+                collect_verbs_recursive(&s.body, verbs);
+            }
+            Statement::Call(s) => {
+                collect_verbs_recursive(&s.on_exception, verbs);
+                collect_verbs_recursive(&s.not_on_exception, verbs);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Configuration for COPY statement expansion and transpilation.
+#[derive(Debug, Clone)]
+pub struct TranspileConfig {
+    /// Directories to search for copybook files.
+    pub copybook_paths: Vec<PathBuf>,
+    /// COBOL library name -> directory mapping (for `COPY name OF library`).
+    pub library_map: HashMap<String, PathBuf>,
+    /// Maximum COPY nesting depth (default 10).
+    pub max_copy_depth: usize,
+}
+
+impl Default for TranspileConfig {
+    fn default() -> Self {
+        Self {
+            copybook_paths: Vec::new(),
+            library_map: HashMap::new(),
+            max_copy_depth: 10,
+        }
+    }
+}
+
+/// Transpile COBOL source with COPY statement expansion.
+///
+/// Like `transpile()`, but first expands COPY statements using the
+/// configured copybook search paths before parsing and code generation.
+///
+/// # Errors
+///
+/// Returns `TranspileError` if COPY resolution, parsing, or code generation fails.
+pub fn transpile_with_config(source: &str, config: &TranspileConfig) -> Result<String> {
+    // Expand COPY statements
+    let resolver = FileSystemResolver::new(config.copybook_paths.clone())
+        .with_library_map(config.library_map.clone());
+    let copy_expander = CopyExpander::new(Box::new(resolver), config.max_copy_depth);
+    let expanded = copy_expander.expand(source)?;
+
+    // Parse (preprocess + ANTLR4) and generate code
+    let program = parse_cobol(&expanded)?;
+    generate_rust(&program)
+}
+
+/// Parse COBOL source with COPY expansion, returning the typed AST.
+pub fn parse_with_config(source: &str, config: &TranspileConfig) -> Result<crate::ast::CobolProgram> {
+    let resolver = FileSystemResolver::new(config.copybook_paths.clone())
+        .with_library_map(config.library_map.clone());
+    let copy_expander = CopyExpander::new(Box::new(resolver), config.max_copy_depth);
+    let expanded = copy_expander.expand(source)?;
+    parse_cobol(&expanded)
+}
+
+/// Transpile COBOL source to Java with COPY expansion.
+pub fn transpile_to_java_with_config(source: &str, config: &TranspileConfig) -> Result<String> {
+    let resolver = FileSystemResolver::new(config.copybook_paths.clone())
+        .with_library_map(config.library_map.clone());
+    let copy_expander = CopyExpander::new(Box::new(resolver), config.max_copy_depth);
+    let expanded = copy_expander.expand(source)?;
+    let program = parse_cobol(&expanded)?;
+    Ok(crate::codegen::java::generate_java(&program))
+}
+
+/// Transpile COBOL source with COPY expansion AND diagnostics/coverage stats.
+///
+/// Combines `transpile_with_config()` and `transpile_with_diagnostics()`:
+/// expands COPY statements, then returns a `TranspileResult` with the generated
+/// Rust code, diagnostics, and coverage statistics.
+pub fn transpile_with_config_and_diagnostics(
+    source: &str,
+    config: &TranspileConfig,
+) -> Result<TranspileResult> {
+    let resolver = FileSystemResolver::new(config.copybook_paths.clone())
+        .with_library_map(config.library_map.clone());
+    let copy_expander = CopyExpander::new(Box::new(resolver), config.max_copy_depth);
+    let expanded = copy_expander.expand(source)?;
+
+    let (program, diagnostics) = parse_cobol_with_diagnostics(&expanded)?;
+    let code = generate_rust(&program)?;
+
+    let total_statements = count_statements(&program);
+    let unhandled_count = diagnostics
+        .iter()
+        .filter(|d| d.category == crate::diagnostics::DiagCategory::UnhandledStatement)
+        .count();
+
+    // Collect verb usage from the AST
+    let mut verbs_used = std::collections::HashSet::new();
+    collect_verbs(&program, &mut verbs_used);
+
+    // Extract unsupported verbs from diagnostics
+    let mut verbs_unsupported = std::collections::HashSet::new();
+    for d in &diagnostics {
+        if d.category == crate::diagnostics::DiagCategory::UnhandledStatement {
+            if let Some(verb) = d.message.strip_prefix("Unhandled COBOL statement: ") {
+                verbs_unsupported.insert(verb.to_string());
+            }
+        }
+    }
+
+    let stats = TranspileStats {
+        total_statements,
+        mapped_statements: total_statements.saturating_sub(unhandled_count),
+        total_data_entries: program
+            .data_division
+            .as_ref()
+            .map_or(0, |dd| count_data_entries(&dd.working_storage)),
+        verbs_used,
+        verbs_unsupported,
+    };
+
+    // Collect hints from the AST
+    let cobol_source = program
+        .source_path
+        .as_deref()
+        .unwrap_or(&program.program_id);
+    let hints = crate::hints::collect_hints(&program, cobol_source, "src/main.rs");
+    let hints_json = Some(crate::hints::hints_to_json(&hints));
+
+    let mut result = TranspileResult::success(code, diagnostics, stats);
+    result.hints_json = hints_json;
+    Ok(result)
+}
+
+/// Shared code generation from a parsed `CobolProgram` to Rust source.
+#[allow(clippy::unnecessary_wraps)]
+fn generate_rust(program: &crate::ast::CobolProgram) -> Result<String> {
+    let mut w = RustWriter::new();
+
+    // File header
+    w.line("//! Auto-generated Rust code from COBOL source.");
+    w.line("//!");
+    w.line(&format!(
+        "//! Program: {}",
+        program.program_id
+    ));
+    w.line("//! Generated by cobol-transpiler.");
+    w.blank_line();
+    w.line("#![allow(unused_imports, unused_variables, non_snake_case, unused_attributes)]");
+    w.blank_line();
+    w.line("use cobol_runtime::prelude::*;");
+
+    let has_sql = !program.exec_sql_statements.is_empty();
+    if has_sql {
+        w.line("use cobol_sql::DuckDbRuntime;");
+    }
+    w.blank_line();
+
+    // Generate WorkingStorage struct
+    if let Some(ref data_div) = program.data_division {
+        generate_working_storage(&mut w, &program.program_id, &data_div.working_storage, &data_div.file_section, has_sql);
+        w.blank_line();
+
+        // Generate LinkageSection struct if present
+        if !data_div.linkage.is_empty() {
+            generate_linkage_section(&mut w, &data_div.linkage);
+            w.blank_line();
+        }
+    }
+
+    // Generate ProgramContext struct
+    w.line("/// Runtime context for the COBOL program.");
+    w.open_block("pub struct ProgramContext {");
+    w.line("pub config: RuntimeConfig,");
+    w.line("pub return_code: i32,");
+    w.line("pub dispatcher: CallDispatcher,");
+    w.line("pub stopped: bool,");
+    w.line("pub exit_program: bool,");
+    w.line("pub goto_target: Option<String>,");
+    w.close_block("}");
+    w.blank_line();
+
+    w.open_block("impl ProgramContext {");
+    w.open_block("pub fn new() -> Self {");
+    w.open_block("Self {");
+    w.line("config: RuntimeConfig::default(),");
+    w.line("return_code: 0,");
+    w.line("dispatcher: CallDispatcher::new(),");
+    w.line("stopped: false,");
+    w.line("exit_program: false,");
+    w.line("goto_target: None,");
+    w.close_block("}");
+    w.close_block("}");
+    w.blank_line();
+
+    w.open_block("pub fn stop_run(&mut self) {");
+    w.line("self.stopped = true;");
+    w.close_block("}");
+    w.blank_line();
+
+    w.open_block("pub fn goback(&mut self) {");
+    w.line("self.exit_program = true;");
+    w.close_block("}");
+    w.blank_line();
+
+    w.close_block("}");
+    w.blank_line();
+
+    // Build condition map from data division for 88-level codegen
+    // Include both WORKING-STORAGE and FILE SECTION records
+    let cmap = if let Some(ref data_div) = program.data_division {
+        let mut cm = build_condition_map(&data_div.working_storage);
+        for fd in &data_div.file_section {
+            let file_cmap = build_condition_map(&fd.records);
+            cm.extend(file_cmap);
+        }
+        cm
+    } else {
+        build_condition_map(&[])
+    };
+
+    // Build record-to-file map from FILE SECTION
+    let record_file_map: crate::codegen::proc_gen::RecordFileMap = program
+        .data_division
+        .as_ref()
+        .map_or_else(HashMap::new, |dd| {
+            let mut m = HashMap::new();
+            for fd in &dd.file_section {
+                // Use record_names captured by the file listener
+                for rname in &fd.record_names {
+                    m.insert(rname.clone(), fd.file_name.clone());
+                }
+                // Also check records (populated if data was parsed inline)
+                for record in &fd.records {
+                    m.insert(record.name.to_uppercase(), fd.file_name.clone());
+                }
+            }
+            m
+        });
+
+    // Build sort/merge field offset map from SD records
+    let sort_field_map: crate::codegen::proc_gen::SortFieldMap = program
+        .data_division
+        .as_ref()
+        .map_or_else(HashMap::new, |dd| {
+            let mut m = HashMap::new();
+            for fd in &dd.file_section {
+                if fd.descriptor_type == crate::ast::FileDescriptorType::Sd {
+                    // Walk the SD record's children and compute byte offsets
+                    for record in &fd.records {
+                        let mut offset: usize = 0;
+                        for child in &record.children {
+                            let len = compute_field_byte_length(child);
+                            m.insert(child.name.to_uppercase(), (offset, len));
+                            offset += len;
+                        }
+                        // Store total record length
+                        m.insert(
+                            format!("__RECLEN_{}", fd.file_name.to_uppercase()),
+                            (0, offset),
+                        );
+                    }
+                }
+            }
+            m
+        });
+
+    // Generate procedure division
+    if let Some(ref proc_div) = program.procedure_division {
+        let (ws_records, file_records) = if let Some(ref dd) = program.data_division {
+            let fr: Vec<_> = dd.file_section.iter().flat_map(|fd| fd.records.clone()).collect();
+            (dd.working_storage.as_slice(), fr)
+        } else {
+            (&[][..], Vec::new())
+        };
+        generate_procedure_division(&mut w, proc_div, &cmap, &record_file_map, &sort_field_map, ws_records, &file_records, has_sql);
+        w.blank_line();
+    }
+
+    // Generate SQL runtime factory (when program uses EXEC SQL)
+    if has_sql {
+        w.line("/// Create the SQL runtime backend for this program.");
+        w.line("/// Default: in-memory DuckDB. Replace with PostgresRuntime etc. for production.");
+        w.open_block("fn create_sql_runtime() -> DuckDbRuntime {");
+        w.line("DuckDbRuntime::in_memory().expect(\"failed to create SQL runtime\")");
+        w.close_block("}");
+        w.blank_line();
+    }
+
+    // Generate main function
+    w.open_block("fn main() {");
+    w.line("let mut ws = WorkingStorage::new();");
+    w.line("let mut ctx = ProgramContext::new();");
+    if has_sql {
+        w.line("let mut sql = create_sql_runtime();");
+        w.line("run(&mut ws, &mut ctx, &mut sql);");
+    } else {
+        w.line("run(&mut ws, &mut ctx);");
+    }
+    w.line("std::process::exit(ctx.return_code);");
+    w.close_block("}");
+
+    Ok(w.finish())
+}
+
+/// Compute the byte length of a data entry from its PIC clause and usage.
+fn compute_field_byte_length(entry: &crate::ast::DataEntry) -> usize {
+    // If byte_length was already computed during layout, use it
+    if let Some(len) = entry.byte_length {
+        return len;
+    }
+    // Compute from PIC clause
+    if let Some(ref pic) = entry.pic {
+        match entry.usage {
+            crate::ast::Usage::Display => {
+                // Display: use display_length (accounts for editing, signs, etc.)
+                pic.display_length as usize
+            }
+            crate::ast::Usage::Comp3 => {
+                // Packed: (total_digits + 2) / 2 -- includes sign nibble
+                (pic.total_digits as usize + 2) / 2
+            }
+            crate::ast::Usage::Comp | crate::ast::Usage::Comp5 => {
+                let digits = pic.total_digits as usize;
+                if digits <= 4 { 2 } else if digits <= 9 { 4 } else { 8 }
+            }
+            crate::ast::Usage::Comp1 => 4,
+            crate::ast::Usage::Comp2 => 8,
+            _ => pic.display_length as usize,
+        }
+    } else {
+        // Group item: sum of children
+        entry.children.iter().map(compute_field_byte_length).sum::<usize>().max(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transpile_hello_world() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. HELLO.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-NAME PIC X(20) VALUE 'WORLD'.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    DISPLAY 'HELLO ' WS-NAME.\n",
+            "    STOP RUN.\n",
+        );
+
+        let result = transpile(source);
+        assert!(result.is_ok(), "transpile failed: {result:?}");
+        let rust_code = result.unwrap();
+
+        // Verify structure
+        assert!(rust_code.contains("use cobol_runtime::prelude::*;"));
+        assert!(rust_code.contains("pub struct WorkingStorage"));
+        assert!(rust_code.contains("fn main()"));
+        assert!(rust_code.contains("WorkingStorage::new()"));
+        assert!(rust_code.contains("print!") || rust_code.contains("println!"));
+        assert!(rust_code.contains("ctx.stop_run()"));
+    }
+
+    #[test]
+    fn transpile_arithmetic() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. ARITH.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-A PIC 9(5) VALUE 10.\n",
+            "01  WS-B PIC 9(5) VALUE 20.\n",
+            "01  WS-C PIC 9(5).\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    ADD WS-A TO WS-B.\n",
+            "    MOVE WS-B TO WS-C.\n",
+            "    DISPLAY WS-C.\n",
+            "    STOP RUN.\n",
+        );
+
+        let result = transpile(source);
+        assert!(result.is_ok(), "transpile failed: {result:?}");
+        let rust_code = result.unwrap();
+
+        assert!(rust_code.contains("cobol_add"));
+        assert!(rust_code.contains("cobol_move"));
+    }
+
+    #[test]
+    fn transpile_if_else() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. TESTIF.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-X PIC 9(3) VALUE 5.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    IF WS-X > 0\n",
+            "        DISPLAY 'POSITIVE'\n",
+            "    ELSE\n",
+            "        DISPLAY 'NOT POSITIVE'\n",
+            "    END-IF.\n",
+            "    STOP RUN.\n",
+        );
+
+        let result = transpile(source);
+        assert!(result.is_ok(), "transpile failed: {result:?}");
+        let rust_code = result.unwrap();
+
+        assert!(rust_code.contains("if "));
+        assert!(rust_code.contains("} else {"));
+    }
+
+    #[test]
+    fn transpile_perform() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. TESTPERF.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-I PIC 9(3).\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    PERFORM WORK-PARA.\n",
+            "    STOP RUN.\n",
+            "WORK-PARA.\n",
+            "    DISPLAY 'WORKING'.\n",
+        );
+
+        let result = transpile(source);
+        assert!(result.is_ok(), "transpile failed: {result:?}");
+        let rust_code = result.unwrap();
+
+        assert!(rust_code.contains("work_para(ws, ctx);"));
+        assert!(rust_code.contains("fn work_para("));
+    }
+
+    #[test]
+    fn transpile_with_config_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("COMMON.cpy"),
+            "01  WS-SHARED PIC X(10) VALUE 'SHARED'.\n",
+        ).unwrap();
+
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. COPYTEST.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "COPY COMMON.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    DISPLAY WS-SHARED.\n",
+            "    STOP RUN.\n",
+        );
+
+        let config = TranspileConfig {
+            copybook_paths: vec![dir.path().to_path_buf()],
+            ..TranspileConfig::default()
+        };
+
+        let result = transpile_with_config(source, &config);
+        assert!(result.is_ok(), "transpile_with_config failed: {result:?}");
+        let rust_code = result.unwrap();
+        assert!(rust_code.contains("ws_shared"));
+    }
+
+    #[test]
+    fn transpile_backward_compatible() {
+        // Existing transpile() still works without COPY expansion
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. COMPAT.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-VAL PIC 9(3).\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    DISPLAY WS-VAL.\n",
+            "    STOP RUN.\n",
+        );
+
+        let result = transpile(source);
+        assert!(result.is_ok(), "transpile failed: {result:?}");
+        let rust_code = result.unwrap();
+        assert!(rust_code.contains("pub struct WorkingStorage"));
+        assert!(rust_code.contains("fn main()"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Session 32: ProgramContext control flow fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn transpile_program_context_fields() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. CTXTEST.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    DISPLAY 'HI'.\n",
+            "    STOP RUN.\n",
+        );
+        let rust_code = transpile(source).expect("transpile failed");
+        assert!(rust_code.contains("pub stopped: bool,"), "missing stopped field: {rust_code}");
+        assert!(rust_code.contains("pub exit_program: bool,"), "missing exit_program field: {rust_code}");
+        assert!(rust_code.contains("pub goto_target: Option<String>,"), "missing goto_target field: {rust_code}");
+        assert!(rust_code.contains("stopped: false,"), "missing stopped init");
+        assert!(rust_code.contains("exit_program: false,"), "missing exit_program init");
+        assert!(rust_code.contains("goto_target: None,"), "missing goto_target init");
+    }
+
+    #[test]
+    fn transpile_stop_run_mutating() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. MUTTEST.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    STOP RUN.\n",
+        );
+        let rust_code = transpile(source).expect("transpile failed");
+        assert!(rust_code.contains("fn stop_run(&mut self)"), "stop_run should be &mut self: {rust_code}");
+        assert!(rust_code.contains("self.stopped = true;"), "stop_run should set stopped flag: {rust_code}");
+        assert!(rust_code.contains("fn goback(&mut self)"), "goback should be &mut self: {rust_code}");
+        assert!(rust_code.contains("self.exit_program = true;"), "goback should set exit_program flag: {rust_code}");
+    }
+
+    #[test]
+    fn transpile_main_exits() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. EXITTEST.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    DISPLAY 'DONE'.\n",
+        );
+        let rust_code = transpile(source).expect("transpile failed");
+        assert!(rust_code.contains("std::process::exit(ctx.return_code)"), "main should call process::exit: {rust_code}");
+    }
+
+    #[test]
+    fn transpile_with_diagnostics_basic() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. DIAGTEST.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-A PIC 9(5) VALUE 10.\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    DISPLAY WS-A.\n",
+            "    STOP RUN.\n",
+        );
+        let result = transpile_with_diagnostics(source).expect("transpile failed");
+        assert!(result.rust_code.is_some());
+        assert!(!result.has_errors());
+        assert!(result.diagnostics.is_empty(), "expected no diagnostics: {:?}", result.diagnostics);
+        assert_eq!(result.stats.total_statements, 2);
+        assert_eq!(result.stats.mapped_statements, 2);
+        assert!((result.statement_coverage() - 100.0).abs() < 0.01);
+        assert!(result.stats.total_data_entries > 0);
+    }
+
+    #[test]
+    fn transpile_with_diagnostics_coverage() {
+        let source = concat!(
+            "IDENTIFICATION DIVISION.\n",
+            "PROGRAM-ID. COVTEST.\n",
+            "DATA DIVISION.\n",
+            "WORKING-STORAGE SECTION.\n",
+            "01  WS-A PIC 9(5).\n",
+            "PROCEDURE DIVISION.\n",
+            "MAIN-PARA.\n",
+            "    MOVE 1 TO WS-A.\n",
+            "    ADD 1 TO WS-A.\n",
+            "    DISPLAY WS-A.\n",
+            "    STOP RUN.\n",
+        );
+        let result = transpile_with_diagnostics(source).expect("transpile failed");
+        assert_eq!(result.stats.total_statements, 4);
+        assert_eq!(result.stats.mapped_statements, 4);
+        assert!((result.statement_coverage() - 100.0).abs() < 0.01);
+    }
+}

@@ -1,0 +1,12 @@
+      * Tests group with FILLER. Expected: HDR: 042
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TYPE-GROUP-FILLER-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-HDR.
+          05 FILLER  PIC X(5) VALUE "HDR: ".
+          05 WS-CODE PIC 9(3) VALUE 42.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-HDR.
+           STOP RUN.

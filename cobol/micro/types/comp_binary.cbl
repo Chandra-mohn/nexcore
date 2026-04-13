@@ -1,0 +1,10 @@
+      * Tests PIC S9(9) COMP binary integer. Expected output: +000123456
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TYPE-COMP-BINARY-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC S9(9) COMP VALUE 123456.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-A
+           STOP RUN.

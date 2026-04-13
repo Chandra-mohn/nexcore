@@ -1,0 +1,15 @@
+      * Tests DIVIDE GIVING REMAINDER clause. Expected output: 00033 then 00001
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DIVIDE-REMAINDER-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC 9(5) VALUE 100.
+       01 WS-B PIC 9(3) VALUE 3.
+       01 WS-C PIC 9(5).
+       01 WS-R PIC 9(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DIVIDE WS-A BY WS-B GIVING WS-C REMAINDER WS-R.
+           DISPLAY WS-C.
+           DISPLAY WS-R.
+           STOP RUN.

@@ -1,0 +1,39 @@
+[package]
+name = "nexmig-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "NexMig CLI: transpile COBOL to Rust/Java, validate, analyze, emit DSL"
+
+[[bin]]
+name = "nexmig"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["duckdb", "direct-emit"]
+duckdb = ["dep:duckdb"]
+direct-emit = ["cobol-rustify/direct-emit"]
+
+[dependencies]
+cobol-transpiler = { workspace = true }
+cobol-data = { workspace = true }
+cobol-rustify = { workspace = true }
+cobol-intel = { workspace = true }
+clap = { workspace = true }
+miette = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+similar = { workspace = true }
+indicatif = { workspace = true }
+rayon = { workspace = true }
+duckdb = { workspace = true, optional = true }
+crossbeam-channel = { workspace = true }
+num_cpus = { workspace = true }
+ctrlc = { workspace = true }
+glob = { workspace = true }
+toml = { workspace = true }

@@ -1,0 +1,13 @@
+      * Tests PERFORM n TIMES. Expected output: 005
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORM-TIMES-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           01 WS-COUNT PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM 5 TIMES
+               ADD 1 TO WS-COUNT
+           END-PERFORM
+           DISPLAY WS-COUNT
+           STOP RUN.

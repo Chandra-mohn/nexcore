@@ -1,0 +1,12 @@
+      * Tests MULTIPLY with ROUNDED clause. Expected output: 00033.3
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MULTIPLY-ROUNDED-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC 9(3)V99 VALUE 3.33.
+       01 WS-B PIC 9(5)V9 VALUE 10.0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MULTIPLY WS-A BY WS-B ROUNDED.
+           DISPLAY WS-B.
+           STOP RUN.

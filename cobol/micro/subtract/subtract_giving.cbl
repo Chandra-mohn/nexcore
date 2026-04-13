@@ -1,0 +1,13 @@
+      * Tests SUBTRACT A FROM B GIVING C. Expected output: 00400
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SUBTRACT-GIVING-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           01 WS-A PIC 9(5) VALUE 100.
+           01 WS-B PIC 9(5) VALUE 500.
+           01 WS-C PIC 9(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           SUBTRACT WS-A FROM WS-B GIVING WS-C.
+           DISPLAY WS-C.
+           STOP RUN.

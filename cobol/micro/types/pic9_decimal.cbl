@@ -1,0 +1,10 @@
+      * Tests PIC 9(5)V99 implicit decimal. Expected output: 0012345
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TYPE-PIC9-DECIMAL-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC 9(5)V99 VALUE 123.45.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-A
+           STOP RUN.

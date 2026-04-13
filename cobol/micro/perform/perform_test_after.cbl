@@ -1,0 +1,15 @@
+      * Tests PERFORM WITH TEST AFTER UNTIL. Expected output: 003
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORM-TEST-AFTER-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           01 WS-I     PIC 9(3) VALUE 1.
+           01 WS-COUNT PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM WITH TEST AFTER UNTIL WS-I > 3
+               ADD 1 TO WS-COUNT
+               ADD 1 TO WS-I
+           END-PERFORM
+           DISPLAY WS-COUNT
+           STOP RUN.

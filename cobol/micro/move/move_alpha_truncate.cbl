@@ -1,0 +1,12 @@
+      * Test: MOVE PIC X(10) to PIC X(5) right-truncation. Expected output: ABCDE
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MOVE-ALPHA-TRUNCATE-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-SRC PIC X(10) VALUE "ABCDEFGHIJ".
+       01 WS-DST PIC X(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE WS-SRC TO WS-DST
+           DISPLAY WS-DST
+           STOP RUN.

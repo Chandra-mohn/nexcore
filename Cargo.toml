@@ -1,43 +1,138 @@
 [workspace]
 resolver = "2"
 members = [
+    # NexMod (Nexflow DSL toolchain)
     "crates/nexflow-parser",
     "crates/nexflow-codegen",
     "crates/nexflow-compiler",
     "crates/nexflow-cli",
+
+    # NexMig (COBOL transpiler + rustification)
+    "crates/cobol-core",
+    "crates/cobol-types",
+    "crates/cobol-move",
+    "crates/cobol-arithmetic",
+    "crates/cobol-io",
+    "crates/cobol-sort",
+    "crates/cobol-sql",
+    "crates/cobol-runtime",
+    "crates/cobol-macros",
+    "crates/cobol-transpiler",
+    "crates/cobol-rustify",
+
+    # NexIntel (code + data intelligence)
+    "crates/cobol-data",
+    "crates/cobol-intel",
+
+    # CLIs
+    "crates/nexmig-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.13"
 edition = "2024"
 rust-version = "1.85"
 license = "LicenseRef-Proprietary"
 authors = ["Chandra Mohn"]
 
 [workspace.dependencies]
-# Parser
-antlr-rust = "0.3.0-beta"
+# Core / Numeric
+rust_decimal = "1.36"
+rust_decimal_macros = "1.36"
+byteorder = "1.5"
+num-traits = "0.2"
 
 # Error handling
 thiserror = "2"
 miette = { version = "7", features = ["fancy"] }
 
-# Serialization
+# Derive / Serialization
+derive_more = { version = "1", features = ["display", "from", "into"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 
-# CLI
+# CLI / Parallelism
 clap = { version = "4", features = ["derive"] }
+similar = "2"
+indicatif = "0.17"
+rayon = "1"
+crossbeam-channel = "0.5"
+num_cpus = "1"
+ctrlc = { version = "3", features = ["termination"] }
+glob = "0.3"
+
+# Storage backends
+rusqlite = { version = "0.32", features = ["bundled"] }
+duckdb = { version = "1.4", features = ["bundled"] }
+tempfile = "3"
+
+# Parser
+antlr-rust = "0.3.0-beta"
+
+# Rust AST analysis
+syn = { version = "2", features = ["full", "parsing", "visit", "visit-mut"] }
+quote = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+sha2 = "0.10"
+
+# Graph / Crypto (cobol-intel)
+petgraph = "0.7"
+bincode = "1"
+aes-gcm = "0.10"
+hkdf = "0.12"
+rand = "0.8"
+rustyline = "15"
 
 # Testing
 pretty_assertions = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Internal crates -- NexMig
+cobol-core = { path = "crates/cobol-core" }
+cobol-types = { path = "crates/cobol-types" }
+cobol-move = { path = "crates/cobol-move" }
+cobol-arithmetic = { path = "crates/cobol-arithmetic" }
+cobol-io = { path = "crates/cobol-io" }
+cobol-sort = { path = "crates/cobol-sort" }
+cobol-sql = { path = "crates/cobol-sql" }
+cobol-runtime = { path = "crates/cobol-runtime" }
+cobol-transpiler = { path = "crates/cobol-transpiler" }
+cobol-rustify = { path = "crates/cobol-rustify" }
+cobol-macros = { path = "crates/cobol-macros" }
+
+# Internal crates -- NexIntel
+cobol-data = { path = "crates/cobol-data" }
+cobol-intel = { path = "crates/cobol-intel" }
+
+# Internal crates -- NexMod
+nexflow-parser = { path = "crates/nexflow-parser" }
+nexflow-compiler = { path = "crates/nexflow-compiler" }
+nexflow-codegen = { path = "crates/nexflow-codegen" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Allow common pedantic items that create noise
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
-missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+missing_errors_doc = "allow"
+doc_markdown = "allow"
+doc_link_with_quotes = "allow"
+missing_fields_in_debug = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+float_cmp = "allow"
+fn_params_excessive_bools = "allow"
+struct_field_names = "allow"
+similar_names = "allow"
+multiple_crate_versions = "allow"
+cargo_common_metadata = "allow"

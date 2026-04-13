@@ -1,0 +1,12 @@
+      * Test: MOVE PIC 9(5) to PIC 9(5) same size. Expected output: 12345
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MOVE-NUMERIC-TO-NUMERIC-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-SRC PIC 9(5) VALUE 12345.
+       01 WS-DST PIC 9(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE WS-SRC TO WS-DST
+           DISPLAY WS-DST
+           STOP RUN.

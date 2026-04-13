@@ -1,0 +1,41 @@
+[package]
+name = "cobol-intel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Code intelligence engine: graph model, NexQuery language, REPL"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Graph engine
+petgraph = "0.7"
+
+# Serialization
+bincode = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Encryption (AES-256-GCM + HKDF key derivation)
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = { workspace = true }
+rand = "0.8"
+
+# Error handling
+thiserror = { workspace = true }
+miette = { workspace = true }
+
+# REPL
+rustyline = "15"
+
+# Internal crates
+cobol-core = { workspace = true }
+cobol-transpiler = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+glob = { workspace = true }

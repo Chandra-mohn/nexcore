@@ -1,0 +1,12 @@
+      * Tests MULTIPLY overflow triggers ON SIZE ERROR handler. Expected output: OVERFLOW
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MULTIPLY-SIZE-ERROR-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC 9(3) VALUE 999.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MULTIPLY 2 BY WS-A
+               ON SIZE ERROR DISPLAY "OVERFLOW"
+           END-MULTIPLY.
+           STOP RUN.

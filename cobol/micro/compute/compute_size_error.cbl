@@ -1,0 +1,12 @@
+      * Test: COMPUTE overflow triggers ON SIZE ERROR. Expected output: OVERFLOW
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMPUTE-SIZE-ERROR-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-R PIC 9(3).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           COMPUTE WS-R = 500 * 500
+               ON SIZE ERROR DISPLAY "OVERFLOW"
+           END-COMPUTE.
+           STOP RUN.

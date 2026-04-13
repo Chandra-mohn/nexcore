@@ -1,0 +1,10 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SIMPLE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RECORD.
+           COPY SIMPLE-TEST.
+       01  WS-FLAG              PIC 9 VALUE ZEROS.
+       PROCEDURE DIVISION.
+           DISPLAY ST-FIELD-A.
+           STOP RUN.

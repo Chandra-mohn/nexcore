@@ -1,0 +1,11 @@
+      * Tests DIVIDE GIVING with ROUNDED clause (10/3 = 3.33 rounded). Expected output: 00333
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DIVIDE-ROUNDED-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A PIC 9(3)V99.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DIVIDE 10 BY 3 GIVING WS-A ROUNDED.
+           DISPLAY WS-A.
+           STOP RUN.

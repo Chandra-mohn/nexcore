@@ -1,0 +1,12 @@
+      * Test: MOVE PIC 9(5) VALUE 42 to PIC X(5). Expected output: 00042
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MOVE-NUMERIC-TO-ALPHA-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-SRC PIC 9(5) VALUE 42.
+       01 WS-DST PIC X(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE WS-SRC TO WS-DST
+           DISPLAY WS-DST
+           STOP RUN.

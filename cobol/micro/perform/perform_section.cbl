@@ -1,0 +1,14 @@
+      * Tests PERFORM a SECTION. Expected output: 00042
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PERFORM-SECTION-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           01 WS-R PIC 9(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM CALC-SECTION
+           DISPLAY WS-R
+           STOP RUN.
+       CALC-SECTION SECTION.
+       CALC-PARA.
+           COMPUTE WS-R = 6 * 7.

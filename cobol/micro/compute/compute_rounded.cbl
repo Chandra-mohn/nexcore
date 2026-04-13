@@ -1,0 +1,11 @@
+      * Test: COMPUTE ROUNDED (100 / 3). Expected output: 03333
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMPUTE-ROUNDED-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-R PIC 9(3)V99.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           COMPUTE WS-R ROUNDED = 100 / 3.
+           DISPLAY WS-R.
+           STOP RUN.
