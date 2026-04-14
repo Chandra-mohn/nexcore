@@ -17,6 +17,11 @@ use crate::parse::helpers::{schema_text as terminal_text, unquote};
 use super::ParseError;
 
 /// Parse a `.schema` source string into a typed `SchemaProgram`.
+///
+/// # Errors
+///
+/// Returns `ParseError::Grammar` if the ANTLR4 parser fails to produce a parse tree.
+/// Returns `ParseError::Ast` if a required AST node is missing from the parse tree.
 pub fn parse_schema(source: &str) -> Result<SchemaProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = SchemaDSLLexer::new(input);

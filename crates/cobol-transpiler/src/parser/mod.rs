@@ -233,6 +233,11 @@ pub fn parse_cobol_with_token_errors(
 /// was detected on the original (unexpanded) source. Copybook content often
 /// has non-standard columns 1-6 (version IDs like `1.001A`) that can fool
 /// auto-detection into choosing free format.
+///
+/// # Errors
+///
+/// Returns `TranspileError::Preprocess` if source preprocessing fails.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
 pub fn parse_cobol_with_format(
     source: &str,
     format: SourceFormat,
@@ -377,6 +382,11 @@ fn parse_data_division_preprocessed(source: &str) -> Result<Vec<DataEntry>> {
 /// Returns `None` if the source has no procedure division.
 /// Emits a warning to stderr if PROCEDURE DIVISION text is found but
 /// the parser extracts 0 paragraphs (indicates a parser issue).
+///
+/// # Errors
+///
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails to
+/// produce a parse tree for the procedure division.
 pub fn parse_procedure_division(source: &str) -> Result<Option<ProcedureDivision>> {
     let upper = source.to_uppercase();
     if !upper.contains("PROCEDURE DIVISION") {

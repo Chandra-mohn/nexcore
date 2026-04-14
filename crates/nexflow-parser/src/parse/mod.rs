@@ -46,11 +46,19 @@ pub enum ParseError {
 
 impl ParseError {
     /// Create a grammar-level parse error.
+    ///
+    /// # Errors
+    ///
+    /// This is an error constructor; it always returns `ParseError::Grammar`.
     pub fn grammar(grammar: &'static str, message: impl Into<String>) -> Self {
         Self::Grammar { grammar, message: message.into() }
     }
 
     /// Create an AST construction error.
+    ///
+    /// # Errors
+    ///
+    /// This is an error constructor; it always returns `ParseError::Ast`.
     pub fn ast(grammar: &'static str, message: impl Into<String>) -> Self {
         Self::Ast { grammar, message: message.into() }
     }

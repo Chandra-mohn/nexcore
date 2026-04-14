@@ -17,6 +17,11 @@ use crate::parse::helpers::{api_text as terminal_text, unquote};
 use super::ParseError;
 
 /// Parse an `.api` source string into a typed `ApiDefinition`.
+///
+/// # Errors
+///
+/// Returns `ParseError::Grammar` if the ANTLR4 parser fails to produce a parse tree.
+/// Returns `ParseError::Ast` if a required AST node is missing from the parse tree.
 pub fn parse_api(source: &str) -> Result<ApiDefinition, ParseError> {
     let input = InputStream::new(source);
     let lexer = ApiDSLLexer::new(input);

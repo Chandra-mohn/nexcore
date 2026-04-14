@@ -15,6 +15,11 @@ use crate::parse::helpers::{rules_text as terminal_text, unquote};
 use super::ParseError;
 
 /// Parse a `.rules` source string into a typed `RulesProgram`.
+///
+/// # Errors
+///
+/// Returns `ParseError::Grammar` if the ANTLR4 parser fails to produce a parse tree.
+/// Returns `ParseError::Ast` if a required AST node is missing from the parse tree.
 pub fn parse_rules(source: &str) -> Result<RulesProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = RulesDSLLexer::new(input);

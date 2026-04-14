@@ -77,6 +77,10 @@ impl<F: FileAccess> ViewerSession<F> {
     }
 
     /// Open a binary dataset file. Clears any previous schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DataError::Io` if the file does not exist or cannot be read.
     pub fn open_dataset(&mut self, path: &str) -> Result<u64> {
         let size = self.fa.file_size(path)?;
         self.dataset_path = Some(path.to_string());
@@ -93,6 +97,10 @@ impl<F: FileAccess> ViewerSession<F> {
     ///
     /// Parses the copybook via cobol-transpiler, extracts REDEFINES groups,
     /// and detects discriminators if program source is provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DataError::ParseError` if the copybook source fails to parse.
     pub fn attach_schema(
         &mut self,
         copybook_src: &str,
@@ -155,6 +163,11 @@ impl<F: FileAccess> ViewerSession<F> {
     }
 
     /// Number of records in the dataset.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DataError::NoDataset` if no dataset is open.
+    /// Returns `DataError::NoSchema` if no schema has been attached.
     pub fn record_count(&self) -> Result<usize> {
         let size = self.dataset_size.ok_or(DataError::NoDataset)?;
         let rec_len = self.record_length.ok_or(DataError::NoSchema)?;
@@ -165,6 +178,13 @@ impl<F: FileAccess> ViewerSession<F> {
     }
 
     /// Decode a window of records starting at `start` index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DataError::NoDataset` if no dataset is open.
+    /// Returns `DataError::NoSchema` if no schema has been attached.
+    /// Returns `DataError::OutOfRange` if `start` exceeds the total record count.
+    /// Returns `DataError::Io` if reading bytes from the dataset fails.
     pub fn decode_window(&self, start: usize, count: usize) -> Result<Vec<DecodedRecord>> {
         let path = self.dataset_path.as_deref().ok_or(DataError::NoDataset)?;
         let entries = self.entries.as_ref().ok_or(DataError::NoSchema)?;
@@ -192,6 +212,12 @@ impl<F: FileAccess> ViewerSession<F> {
     }
 
     /// Read raw bytes from the dataset.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DataError::NoDataset` if no dataset is open.
+    /// Returns `DataError::OutOfRange` if `start` exceeds the dataset size.
+    /// Returns `DataError::Io` if reading bytes from the dataset fails.
     pub fn read_raw_window(&self, start: u64, length: usize) -> Result<Vec<u8>> {
         let path = self.dataset_path.as_deref().ok_or(DataError::NoDataset)?;
         let size = self.dataset_size.ok_or(DataError::NoDataset)?;
@@ -208,6 +234,10 @@ impl<F: FileAccess> ViewerSession<F> {
     }
 
     /// Export a range of records to a formatted string.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error that [`decode_window`](Self::decode_window) can return.
     pub fn export_range(
         &self,
         start: usize,
@@ -220,6 +250,11 @@ impl<F: FileAccess> ViewerSession<F> {
     }
 
     /// Streaming export to a writer. Returns (records_written, bytes_written).
+    ///
+    /// # Errors
+    ///
+    /// Returns `DataError::NoDataset` or `DataError::NoSchema` if the session is not ready.
+    /// Returns `DataError::Io` if writing to the output writer fails.
     pub fn export_to_writer<W: std::io::Write>(
         &self,
         writer: &mut W,

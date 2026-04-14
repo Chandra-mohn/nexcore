@@ -31,6 +31,12 @@ use rules::{AnalysisContext, RuleRegistry};
 ///
 /// Reads Rust source files from `source_dir`, runs rules for the configured
 /// tier, and returns an `AnalysisReport` with all proposed transforms.
+///
+/// # Errors
+///
+/// Returns `RustifyError::SourceNotFound` if `config.source_dir` does not exist.
+/// Returns `RustifyError::Io` if reading source files or hints fails.
+/// Returns `RustifyError::Json` if `hints.json` is malformed.
 pub fn analyze_workspace(config: &RustifyConfig) -> Result<AnalysisReport, RustifyError> {
     let source_dir = &config.source_dir;
     if !source_dir.exists() {
@@ -104,6 +110,16 @@ pub struct ApplyReport {
 ///
 /// Copies the source workspace to `output_dir`, applies transforms to .rs files,
 /// and writes a manifest recording checksums and provenance.
+///
+/// # Errors
+///
+/// Returns `RustifyError::Io` if `config.output_dir` is `None`.
+/// Returns `RustifyError::SourceNotFound` if `config.source_dir` does not exist.
+/// Returns `RustifyError::SameDirectory` if source and output directories are the same.
+/// Returns `RustifyError::PatchesDetected` if the output has user patches and neither
+/// `--force` nor `--preserve-patches` is set.
+/// Returns `RustifyError::Io` if file copying, writing, or manifest serialization fails.
+/// Returns `RustifyError::Json` if `hints.json` is malformed.
 pub fn apply_workspace(config: &RustifyConfig) -> Result<ApplyReport, RustifyError> {
     let source_dir = &config.source_dir;
     let output_dir = match &config.output_dir {
@@ -407,6 +423,10 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 ///
 /// Walks `<output>/src/` (or flat .rs layout), parses each .rs file with syn,
 /// runs all 4 DSL emitters, and writes output under `<output>/dsl/`.
+///
+/// # Errors
+///
+/// Returns `RustifyError::Io` if reading source files or writing DSL output fails.
 pub fn emit_dsl_for_workspace(output_dir: &Path) -> Result<Vec<dsl::writer::DslWriteReport>, RustifyError> {
     let src_dir = resolve_rs_dir(output_dir);
     let rs_files = collect_rs_files(&src_dir, None, None);

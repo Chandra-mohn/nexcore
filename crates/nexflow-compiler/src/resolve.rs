@@ -67,6 +67,10 @@ pub struct UnresolvedImport {
 /// and all transitively imported files are loaded. Files with extensions we
 /// don't have parsers for (.rules, .xform, .proc) are recorded as unresolved
 /// with an informational reason.
+///
+/// # Errors
+///
+/// Returns `ParseError::Ast` if the root path cannot be canonicalized (e.g., does not exist).
 pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), ParseError> {
     let root_path = root_path
         .canonicalize()
@@ -347,6 +351,11 @@ fn load_and_parse_schema(path: &Path) -> Result<(SchemaProgram, Vec<ImportPath>)
 
 /// Load individual files by path (no import resolution).
 /// Useful for CLI when user specifies multiple files explicitly.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`. Parse failures for individual
+/// files are recorded as diagnostics rather than propagated as errors.
 pub fn load_files(paths: &[PathBuf]) -> Result<(Project, ValidationResult), ParseError> {
     let mut project = Project {
         apis: Vec::new(),

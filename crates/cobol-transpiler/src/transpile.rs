@@ -31,6 +31,12 @@ pub fn transpile(source: &str) -> Result<String> {
 ///
 /// Like `transpile()`, but returns a `TranspileResult` with diagnostics
 /// for unhandled statements, parse issues, and coverage statistics.
+///
+/// # Errors
+///
+/// Returns `TranspileError::Preprocess` if source preprocessing fails.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
+/// Returns `TranspileError::CodeGen` if Rust code generation fails.
 pub fn transpile_with_diagnostics(source: &str) -> Result<TranspileResult> {
     let (program, diagnostics) = parse_cobol_with_diagnostics(source)?;
     let code = generate_rust(&program)?;
@@ -262,6 +268,13 @@ pub fn transpile_with_config(source: &str, config: &TranspileConfig) -> Result<S
 }
 
 /// Parse COBOL source with COPY expansion, returning the typed AST.
+///
+/// # Errors
+///
+/// Returns `TranspileError::CopyNotFound` if a referenced copybook cannot be located.
+/// Returns `TranspileError::CopyCyclic` if a cyclic COPY dependency is detected.
+/// Returns `TranspileError::CopyDepthExceeded` if COPY nesting exceeds the configured maximum.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
 pub fn parse_with_config(source: &str, config: &TranspileConfig) -> Result<crate::ast::CobolProgram> {
     let resolver = FileSystemResolver::new(config.copybook_paths.clone())
         .with_library_map(config.library_map.clone());
@@ -271,6 +284,12 @@ pub fn parse_with_config(source: &str, config: &TranspileConfig) -> Result<crate
 }
 
 /// Transpile COBOL source to Java with COPY expansion.
+///
+/// # Errors
+///
+/// Returns `TranspileError::CopyNotFound` if a referenced copybook cannot be located.
+/// Returns `TranspileError::CopyCyclic` if a cyclic COPY dependency is detected.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
 pub fn transpile_to_java_with_config(source: &str, config: &TranspileConfig) -> Result<String> {
     let resolver = FileSystemResolver::new(config.copybook_paths.clone())
         .with_library_map(config.library_map.clone());
@@ -285,6 +304,14 @@ pub fn transpile_to_java_with_config(source: &str, config: &TranspileConfig) -> 
 /// Combines `transpile_with_config()` and `transpile_with_diagnostics()`:
 /// expands COPY statements, then returns a `TranspileResult` with the generated
 /// Rust code, diagnostics, and coverage statistics.
+///
+/// # Errors
+///
+/// Returns `TranspileError::CopyNotFound` if a referenced copybook cannot be located.
+/// Returns `TranspileError::CopyCyclic` if a cyclic COPY dependency is detected.
+/// Returns `TranspileError::CopyDepthExceeded` if COPY nesting exceeds the configured maximum.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
+/// Returns `TranspileError::CodeGen` if Rust code generation fails.
 pub fn transpile_with_config_and_diagnostics(
     source: &str,
     config: &TranspileConfig,

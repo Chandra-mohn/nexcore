@@ -15,6 +15,11 @@ use crate::parse::helpers::{xform_text as terminal_text, unquote};
 use super::ParseError;
 
 /// Parse a `.xform` source string into a typed `TransformProgram`.
+///
+/// # Errors
+///
+/// Returns `ParseError::Grammar` if the ANTLR4 parser fails to produce a parse tree.
+/// Returns `ParseError::Ast` if a required AST node is missing from the parse tree.
 pub fn parse_transform(source: &str) -> Result<TransformProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = TransformDSLLexer::new(input);

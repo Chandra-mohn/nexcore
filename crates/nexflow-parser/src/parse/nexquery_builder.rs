@@ -14,6 +14,11 @@ use crate::parse::helpers::{nxq_text as terminal_text, unquote_single};
 use super::ParseError;
 
 /// Parse a `.nxq` source string into a typed `NexQueryScript`.
+///
+/// # Errors
+///
+/// Returns `ParseError::Grammar` if the ANTLR4 parser fails to produce a parse tree.
+/// Returns `ParseError::Ast` if a required AST node is missing from the parse tree.
 pub fn parse_nexquery(source: &str) -> Result<NexQueryScript, ParseError> {
     let input = InputStream::new(source);
     let lexer = NexQueryDSLLexer::new(input);
