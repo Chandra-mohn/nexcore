@@ -374,8 +374,8 @@ pub fn run_phase1_ndjson(
             .spawn()
             .map_err(|e| miette::miette!("failed to spawn worker {i}: {e}"))?;
 
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().expect("stdin piped via Stdio::piped()");
+        let stdout = child.stdout.take().expect("stdout piped via Stdio::piped()");
 
         // Reader thread: reads NDJSON lines from worker stdout, sends to result channel.
         let tx = result_tx.clone();

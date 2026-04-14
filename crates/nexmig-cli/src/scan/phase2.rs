@@ -230,8 +230,8 @@ pub fn run_phase2_ndjson(
             .spawn()
             .map_err(|e| miette::miette!("failed to spawn coverage worker {i}: {e}"))?;
 
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().expect("stdin piped via Stdio::piped()");
+        let stdout = child.stdout.take().expect("stdout piped via Stdio::piped()");
 
         let tx = result_tx.clone();
         let reader = thread::Builder::new()

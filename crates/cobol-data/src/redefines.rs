@@ -136,7 +136,7 @@ fn extract_from_children(children: &[DataEntry], groups: &mut Vec<RedefinesGroup
                     variants,
                     discriminator: None,
                 });
-                groups.last_mut().unwrap()
+                groups.last_mut().expect("just pushed to groups")
             };
 
             // Collect child field names for this variant

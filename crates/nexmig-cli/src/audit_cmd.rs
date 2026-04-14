@@ -642,7 +642,7 @@ pub fn run(cli: &Cli, args: &AuditArgs) -> Result<ExitCode> {
         if analysis.valid {
             parsed_ok_paths
                 .lock()
-                .unwrap()
+                .expect("parsed_ok_paths mutex poisoned")
                 .push(rel_path.to_string());
         }
 
@@ -708,13 +708,13 @@ pub fn run(cli: &Cli, args: &AuditArgs) -> Result<ExitCode> {
             parse_time_ms: Some(analysis.parse_time_ms),
         };
 
-        validation_results.lock().unwrap().push(result);
+        validation_results.lock().expect("validation_results mutex poisoned").push(result);
         pb.inc(1);
     });
     pb.finish_and_clear();
 
     // Add blocked file results.
-    let mut all_results = validation_results.into_inner().unwrap();
+    let mut all_results = validation_results.into_inner().expect("validation_results mutex poisoned");
     for (path, missing) in &blocked_files {
         all_results.push(ValidationFileResult {
             path: path.to_string(),
@@ -794,7 +794,7 @@ pub fn run(cli: &Cli, args: &AuditArgs) -> Result<ExitCode> {
         None
     } else {
         let phase4_start = Instant::now();
-        let ok_paths = parsed_ok_paths.into_inner().unwrap();
+        let ok_paths = parsed_ok_paths.into_inner().expect("parsed_ok_paths mutex poisoned");
         if !cli.quiet {
             eprintln!("Phase 4: Analyzing coverage ({} files)...", ok_paths.len());
         }
@@ -824,7 +824,7 @@ pub fn run(cli: &Cli, args: &AuditArgs) -> Result<ExitCode> {
 
             let analysis = analyze::analyze_source(&expanded.source, true);
             if let Some(cov) = analysis.coverage {
-                coverages.lock().unwrap().push(FileCoverage {
+                coverages.lock().expect("coverages mutex poisoned").push(FileCoverage {
                     path: rel_path.clone(),
                     total_statements: cov.total_statements,
                     mapped_statements: cov.mapped_statements,
@@ -835,7 +835,7 @@ pub fn run(cli: &Cli, args: &AuditArgs) -> Result<ExitCode> {
         });
         pb.finish_and_clear();
 
-        let file_coverages = coverages.into_inner().unwrap();
+        let file_coverages = coverages.into_inner().expect("coverages mutex poisoned");
         let avg_coverage = if file_coverages.is_empty() {
             0.0
         } else {

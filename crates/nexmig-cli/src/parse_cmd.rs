@@ -153,12 +153,12 @@ fn render_tree(program: &CobolProgram, section: SectionFilter) -> String {
         let connector = if is_last { "`" } else { "+" };
         let prefix = if is_last { "    " } else { "|   " };
         let _ = writeln!(buf,"{connector}-- DATA DIVISION");
-        render_data_division(&mut buf, program.data_division.as_ref().unwrap(), prefix);
+        render_data_division(&mut buf, program.data_division.as_ref().expect("has_data confirms data_division is Some"), prefix);
     }
 
     if has_proc {
         buf.push_str("`-- PROCEDURE DIVISION\n");
-        render_procedure_division(&mut buf, program.procedure_division.as_ref().unwrap(), "    ");
+        render_procedure_division(&mut buf, program.procedure_division.as_ref().expect("has_proc confirms procedure_division is Some"), "    ");
     }
 
     buf

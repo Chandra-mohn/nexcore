@@ -194,7 +194,7 @@ pub fn run(cli: &Cli, args: &CorpusArgs) -> Result<ExitCode> {
                         } else {
                             None
                         };
-                        results.lock().unwrap().push(RepoResult {
+                        results.lock().expect("results mutex poisoned").push(RepoResult {
                             repo_output,
                             success: true,
                             meta,
@@ -294,7 +294,7 @@ pub fn run(cli: &Cli, args: &CorpusArgs) -> Result<ExitCode> {
                     }
 
                     // Store result for post-processing
-                    results.lock().unwrap().push(RepoResult {
+                    results.lock().expect("results mutex poisoned").push(RepoResult {
                         repo_output,
                         success,
                         meta,
@@ -306,8 +306,8 @@ pub fn run(cli: &Cli, args: &CorpusArgs) -> Result<ExitCode> {
 
     // -- All workers done. Merge results sequentially. --
 
-    let results = results.into_inner().unwrap();
-    let mut log_file = log_mutex.into_inner().unwrap();
+    let results = results.into_inner().expect("results mutex poisoned");
+    let mut log_file = log_mutex.into_inner().expect("log mutex poisoned");
 
     let mut succeeded_repos: u32 = 0;
     let mut failed_repos: u32 = 0;

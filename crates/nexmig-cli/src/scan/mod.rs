@@ -137,7 +137,7 @@ pub fn run(cli: &Cli, scan_args: &ScanArgs) -> Result<ExitCode> {
 // ---------------------------------------------------------------------------
 
 fn run_ndjson(cli: &Cli, scan_args: &ScanArgs) -> Result<ExitCode> {
-    let scan_dir = scan_args.scan_dir.as_ref().unwrap();
+    let scan_dir = scan_args.scan_dir.as_ref().expect("run_ndjson only called when scan_dir is Some");
 
     if !scan_args.root_dir.exists() {
         return Err(miette::miette!(

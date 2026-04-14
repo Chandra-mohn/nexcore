@@ -150,7 +150,7 @@ fn collect_candidates(hints: &FileHints) -> Vec<BoolCandidate> {
             continue;
         }
 
-        let (_, value) = group.conditions.iter().next().unwrap();
+        let (_, value) = group.conditions.iter().next().expect("conditions.len() == 1 confirmed above");
         candidates.push(BoolCandidate {
             field_name: field_name.clone(),
             true_value: value.clone(),

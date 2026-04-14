@@ -216,7 +216,7 @@ pub fn run(cli: &Cli, args: &RustifyArgs) -> Result<ExitCode> {
 
         eprintln!(
             "Applied to {}: {} files copied, {} files transformed, manifest written.",
-            args.output.as_ref().unwrap().display(),
+            args.output.as_ref().expect("guarded by args.output.is_some() above").display(),
             apply_report.files_copied,
             apply_report.files_transformed,
         );

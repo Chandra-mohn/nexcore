@@ -37,17 +37,17 @@ impl ErrorStore {
 
     /// Drain all collected errors.
     pub fn drain(&self) -> Vec<TokenError> {
-        std::mem::take(&mut *self.errors.lock().unwrap())
+        std::mem::take(&mut *self.errors.lock().expect("ErrorStore mutex poisoned"))
     }
 
     /// Total number of collected errors.
     pub fn count(&self) -> usize {
-        self.errors.lock().unwrap().len()
+        self.errors.lock().expect("ErrorStore mutex poisoned").len()
     }
 
     /// Summarize errors by offending text (character -> count).
     pub fn summarize(&self) -> BTreeMap<String, usize> {
-        let errors = self.errors.lock().unwrap();
+        let errors = self.errors.lock().expect("ErrorStore mutex poisoned");
         let mut counts = BTreeMap::new();
         for err in errors.iter() {
             *counts.entry(err.offending_text.clone()).or_insert(0) += 1;
@@ -56,7 +56,7 @@ impl ErrorStore {
     }
 
     fn push(&self, error: TokenError) {
-        self.errors.lock().unwrap().push(error);
+        self.errors.lock().expect("ErrorStore mutex poisoned").push(error);
     }
 }
 

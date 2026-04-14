@@ -231,21 +231,21 @@ fn is_data_only_file(path: &Path) -> bool {
 /// Build the `.cobol2rust.toml` content from discovered directories.
 fn build_toml(copy_dirs: &[PathBuf]) -> String {
     let mut out = String::new();
-    writeln!(out, "[workspace]").unwrap();
+    writeln!(out, "[workspace]").expect("write to String");
 
     if copy_dirs.is_empty() {
-        writeln!(out, "copy_paths = []").unwrap();
+        writeln!(out, "copy_paths = []").expect("write to String");
     } else {
-        writeln!(out, "copy_paths = [").unwrap();
+        writeln!(out, "copy_paths = [").expect("write to String");
         for (i, dir) in copy_dirs.iter().enumerate() {
             let path_str = dir.to_string_lossy();
             if i < copy_dirs.len() - 1 {
-                writeln!(out, "    \"{}\",", path_str).unwrap();
+                writeln!(out, "    \"{}\",", path_str).expect("write to String");
             } else {
-                writeln!(out, "    \"{}\"", path_str).unwrap();
+                writeln!(out, "    \"{}\"", path_str).expect("write to String");
             }
         }
-        writeln!(out, "]").unwrap();
+        writeln!(out, "]").expect("write to String");
     }
 
     out

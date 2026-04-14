@@ -215,16 +215,16 @@ pub fn analyze_workspace(
             Ok(info) => {
                 let crate_name = cobol_name_to_crate(&info.program_id);
                 {
-                    let mut cbs = all_copybooks_mutex.lock().unwrap();
+                    let mut cbs = all_copybooks_mutex.lock().expect("copybooks mutex poisoned");
                     for cb in &info.copybooks {
                         cbs.insert(cb.clone());
                     }
                 }
-                programs_mutex.lock().unwrap().insert(crate_name, info);
+                programs_mutex.lock().expect("programs mutex poisoned").insert(crate_name, info);
             }
             Err(e) => {
                 if continue_on_error {
-                    errors_mutex.lock().unwrap().push((cbl_path.clone(), format!("{e}")));
+                    errors_mutex.lock().expect("errors mutex poisoned").push((cbl_path.clone(), format!("{e}")));
                 }
                 // When not continue_on_error, we skip the error here and check below.
                 // Parallel iteration can't return early, so we collect and check after.
@@ -232,9 +232,9 @@ pub fn analyze_workspace(
         }
     });
 
-    let mut programs = programs_mutex.into_inner().unwrap();
-    let errors = errors_mutex.into_inner().unwrap();
-    let all_copybooks = all_copybooks_mutex.into_inner().unwrap();
+    let mut programs = programs_mutex.into_inner().expect("programs mutex poisoned");
+    let errors = errors_mutex.into_inner().expect("errors mutex poisoned");
+    let all_copybooks = all_copybooks_mutex.into_inner().expect("copybooks mutex poisoned");
 
     // If not continue_on_error and we had errors, report the first one.
     if !continue_on_error && !errors.is_empty() {

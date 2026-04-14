@@ -2674,7 +2674,7 @@ fn condition_name_expr(dr: &DataReference, cmap: &ConditionMap) -> String {
         }).collect();
 
         if parts.len() == 1 {
-            parts.into_iter().next().unwrap()
+            parts.into_iter().next().expect("parts.len() == 1 confirmed above")
         } else {
             format!("({})", parts.join(" || "))
         }

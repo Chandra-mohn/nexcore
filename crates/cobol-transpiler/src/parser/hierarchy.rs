@@ -50,8 +50,8 @@ pub fn build_hierarchy(flat_items: Vec<DataEntry>) -> Vec<DataEntry> {
                 if stack.len() > 1 {
                     // Pop back to level 01 and add as child
                     while stack.len() > 1 {
-                        let child = stack.pop().unwrap();
-                        stack.last_mut().unwrap().children.push(child);
+                        let child = stack.pop().expect("stack len > 1 guarantees pop");
+                        stack.last_mut().expect("stack len >= 1 after pop").children.push(child);
                     }
                 }
                 if let Some(record) = stack.last_mut() {
@@ -62,10 +62,10 @@ pub fn build_hierarchy(flat_items: Vec<DataEntry>) -> Vec<DataEntry> {
             level @ 2..=49 => {
                 // Pop stack until we find an ancestor with a lower level number
                 while stack.len() > 1 {
-                    let top_level = stack.last().unwrap().level;
+                    let top_level = stack.last().expect("stack len > 1 guarantees last").level;
                     if top_level >= level {
-                        let child = stack.pop().unwrap();
-                        stack.last_mut().unwrap().children.push(child);
+                        let child = stack.pop().expect("stack len > 1 guarantees pop");
+                        stack.last_mut().expect("stack len >= 1 after pop").children.push(child);
                     } else {
                         break;
                     }
@@ -94,8 +94,8 @@ fn flush_stack(stack: &mut Vec<DataEntry>, records: &mut Vec<DataEntry>) {
 
     // Pop everything back to the root (level 01/77)
     while stack.len() > 1 {
-        let child = stack.pop().unwrap();
-        stack.last_mut().unwrap().children.push(child);
+        let child = stack.pop().expect("stack len > 1 guarantees pop");
+        stack.last_mut().expect("stack len >= 1 after pop").children.push(child);
     }
 
     if let Some(record) = stack.pop() {

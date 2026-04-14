@@ -269,7 +269,7 @@ fn parse_proc_resilient(input: &str) -> (Option<ProcedureDivision>, Vec<Transpil
     match parse_proc_division_isolated(input) {
         Ok((pd, diags, _token_errors)) => (pd, diags),
         Err(e) => {
-            eprintln!("[WARN] Isolated PROCEDURE DIVISION parse failed: {e}");
+            tracing::warn!(error = %e, "Isolated PROCEDURE DIVISION parse failed");
             (None, Vec::new())
         }
     }
@@ -350,7 +350,7 @@ pub fn parse_data_division(source: &str) -> Result<Vec<DataEntry>> {
 fn parse_data_division_preprocessed(source: &str) -> Result<Vec<DataEntry>> {
     let listener = run_data_listener(source)?;
     for d in &listener.diagnostics {
-        eprintln!("  [{severity}] {cat}: {msg}", severity = d.severity, cat = d.category, msg = d.message);
+        tracing::warn!(severity = %d.severity, category = %d.category, "{}", d.message);
     }
     let mut records = build_hierarchy(listener.items);
 
@@ -503,26 +503,19 @@ fn parse_data_chunks(data_text: &str, batch_size: usize) -> Vec<DataEntry> {
         match run_data_listener(&wrapped) {
             Ok(listener) => {
                 for d in &listener.diagnostics {
-                    eprintln!("  [{severity}] {cat}: {msg}",
-                        severity = d.severity, cat = d.category, msg = d.message);
+                    tracing::warn!(severity = %d.severity, category = %d.category, "{}", d.message);
                 }
                 all_items.extend(listener.items);
                 success_count += 1;
             }
             Err(e) => {
-                eprintln!(
-                    "[WARN] DATA DIVISION chunk {}/{total_chunks} parse failed: {e}",
-                    i + 1,
-                );
+                tracing::warn!(chunk = i + 1, total = total_chunks, error = %e, "DATA DIVISION chunk parse failed");
             }
         }
     }
 
     if total_chunks > 1 {
-        eprintln!(
-            "[INFO] Parsed {success_count}/{total_chunks} DATA DIVISION chunks, {} total fields",
-            all_items.len(),
-        );
+        tracing::info!(success = success_count, total = total_chunks, fields = all_items.len(), "DATA DIVISION chunk parsing complete");
     }
 
     all_items
@@ -597,7 +590,7 @@ fn parse_file_section_isolated(source: &str) -> Vec<FileDescription> {
     match run_file_listener(&isolated) {
         Ok(listener) => listener.into_file_descriptions(),
         Err(e) => {
-            eprintln!("[WARN] Isolated FILE SECTION parse failed: {e}");
+            tracing::warn!(error = %e, "Isolated FILE SECTION parse failed");
             Vec::new()
         }
     }
@@ -885,7 +878,7 @@ fn inject_exec_sql_into_stmts<'a>(
         match stmt {
             Statement::Continue => {
                 if blocks.peek().is_some() {
-                    let exec = blocks.next().unwrap().clone();
+                    let exec = blocks.next().expect("peek confirmed element exists").clone();
                     *stmt = Statement::ExecSql(exec);
                 }
             }
