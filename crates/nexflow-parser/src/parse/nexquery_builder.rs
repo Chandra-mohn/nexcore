@@ -11,9 +11,10 @@ use crate::ast::nexquery::*;
 use crate::generated::nexquerydsllexer::NexQueryDSLLexer;
 use crate::generated::nexquerydslparser::*;
 use crate::parse::helpers::{nxq_text as terminal_text, unquote_single};
+use super::ParseError;
 
 /// Parse a `.nxq` source string into a typed `NexQueryScript`.
-pub fn parse_nexquery(source: &str) -> Result<NexQueryScript, String> {
+pub fn parse_nexquery(source: &str) -> Result<NexQueryScript, ParseError> {
     let input = InputStream::new(source);
     let lexer = NexQueryDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -21,12 +22,12 @@ pub fn parse_nexquery(source: &str) -> Result<NexQueryScript, String> {
 
     let tree = parser
         .program()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("NexQueryDSL", format!("{e:?}")))?;
 
     build_program(&*tree)
 }
 
-fn build_program(ctx: &ProgramContext<'_>) -> Result<NexQueryScript, String> {
+fn build_program(ctx: &ProgramContext<'_>) -> Result<NexQueryScript, ParseError> {
     let statements: Vec<NexQueryStatement> = ctx
         .statement_all()
         .iter()

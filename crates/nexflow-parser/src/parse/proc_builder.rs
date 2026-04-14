@@ -16,9 +16,10 @@ use crate::ast::proc::*;
 use crate::generated::procdsllexer::ProcDSLLexer;
 use crate::generated::procdslparser::*;
 use crate::parse::helpers::{proc_text as terminal_text, unquote};
+use super::ParseError;
 
 /// Parse a `.proc` source string into a typed `ProcProgram`.
-pub fn parse_proc(source: &str) -> Result<ProcProgram, String> {
+pub fn parse_proc(source: &str) -> Result<ProcProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = ProcDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -26,12 +27,12 @@ pub fn parse_proc(source: &str) -> Result<ProcProgram, String> {
 
     let tree = parser
         .program()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("ProcDSL", format!("{e:?}")))?;
 
     build_program(&*tree)
 }
 
-fn build_program(ctx: &ProgramContext<'_>) -> Result<ProcProgram, String> {
+fn build_program(ctx: &ProgramContext<'_>) -> Result<ProcProgram, ParseError> {
     let imports: Vec<ImportPath> = ctx
         .importStatement_all()
         .iter()

@@ -12,9 +12,10 @@ use crate::ast::rules::*;
 use crate::generated::rulesdsllexer::RulesDSLLexer;
 use crate::generated::rulesdslparser::*;
 use crate::parse::helpers::{rules_text as terminal_text, unquote};
+use super::ParseError;
 
 /// Parse a `.rules` source string into a typed `RulesProgram`.
-pub fn parse_rules(source: &str) -> Result<RulesProgram, String> {
+pub fn parse_rules(source: &str) -> Result<RulesProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = RulesDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -22,12 +23,12 @@ pub fn parse_rules(source: &str) -> Result<RulesProgram, String> {
 
     let tree = parser
         .program()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("RulesDSL", format!("{e:?}")))?;
 
     build_program(&*tree)
 }
 
-fn build_program(ctx: &ProgramContext<'_>) -> Result<RulesProgram, String> {
+fn build_program(ctx: &ProgramContext<'_>) -> Result<RulesProgram, ParseError> {
     let imports: Vec<ImportPath> = ctx
         .importStatement_all()
         .iter()

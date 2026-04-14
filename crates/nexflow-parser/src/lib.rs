@@ -20,7 +20,7 @@ pub mod ast;
 pub mod generated;
 pub mod parse;
 
-// Re-export the main parse functions for convenience.
+// Re-export the main parse functions and error type for convenience.
 pub use parse::api_builder::parse_api;
 pub use parse::nexquery_builder::parse_nexquery;
 pub use parse::proc_builder::parse_proc;
@@ -28,3 +28,4 @@ pub use parse::rules_builder::parse_rules;
 pub use parse::schema_builder::parse_schema;
 pub use parse::service_builder::parse_service;
 pub use parse::transform_builder::parse_transform;
+pub use parse::ParseError;

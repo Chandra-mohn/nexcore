@@ -204,7 +204,7 @@ fn cmd_parse(file: &Path, output_format: &str, verbose: bool) -> Result<(), Stri
 
     // Load and parse
     let files = vec![file.to_path_buf()];
-    let (proj, diags) = nexflow_compiler::load_files(&files)?;
+    let (proj, diags) = nexflow_compiler::load_files(&files).map_err(|e| e.to_string())?;
 
     for diag in &diags.diagnostics {
         eprintln!("{diag}");
@@ -271,7 +271,7 @@ fn cmd_validate(
         eprintln!("Validating {} file(s)...", files.len());
     }
 
-    let (proj, load_diags) = nexflow_compiler::load_files(&files)?;
+    let (proj, load_diags) = nexflow_compiler::load_files(&files).map_err(|e| e.to_string())?;
 
     // Collect errors from loading
     let mut errors: Vec<format::ValidateError> = Vec::new();
@@ -373,9 +373,9 @@ fn cmd_validate(
 
 fn validate_source(source: &str, layer: &str, output_format: &str, start: Instant) -> Result<(), String> {
     let parse_result = match layer {
-        "api" => nexflow_parser::parse_api(source).map(|_| ()),
-        "service" => nexflow_parser::parse_service(source).map(|_| ()),
-        "schema" => nexflow_parser::parse_schema(source).map(|_| ()),
+        "api" => nexflow_parser::parse_api(source).map(|_| ()).map_err(|e| e.to_string()),
+        "service" => nexflow_parser::parse_service(source).map(|_| ()).map_err(|e| e.to_string()),
+        "schema" => nexflow_parser::parse_schema(source).map(|_| ()).map_err(|e| e.to_string()),
         _ => Err(format!("Unsupported layer: {layer}. Use api, service, or schema.")),
     };
 
@@ -501,7 +501,7 @@ fn cmd_build(
         eprintln!("  Phase 1: Parsing {} file(s)...", files.len());
     }
 
-    let (loaded, load_diags) = nexflow_compiler::load_files(&files)?;
+    let (loaded, load_diags) = nexflow_compiler::load_files(&files).map_err(|e| e.to_string())?;
 
     for diag in &load_diags.diagnostics {
         eprintln!("{diag}");
@@ -779,15 +779,15 @@ fn cmd_generate(
                 entry_file.display()
             ));
         }
-        nexflow_compiler::load_files(&files)?
+        nexflow_compiler::load_files(&files).map_err(|e| e.to_string())?
     } else {
-        let mut result = nexflow_compiler::load_project(entry_file)?;
+        let mut result = nexflow_compiler::load_project(entry_file).map_err(|e| e.to_string())?;
 
         if !extra_files.is_empty() {
             if verbose {
                 eprintln!("Loading {} additional file(s)...", extra_files.len());
             }
-            let (extra, extra_diags) = nexflow_compiler::load_files(extra_files)?;
+            let (extra, extra_diags) = nexflow_compiler::load_files(extra_files).map_err(|e| e.to_string())?;
             for diag in &extra_diags.diagnostics {
                 eprintln!("{diag}");
             }

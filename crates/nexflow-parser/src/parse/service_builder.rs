@@ -14,9 +14,10 @@ use crate::ast::service::*;
 use crate::generated::servicedsllexer::ServiceDSLLexer;
 use crate::generated::servicedslparser::*;
 use crate::parse::helpers::{svc_text as terminal_text, unquote};
+use super::ParseError;
 
 /// Parse a `.service` source string into a typed `ServiceDefinition`.
-pub fn parse_service(source: &str) -> Result<ServiceDefinition, String> {
+pub fn parse_service(source: &str) -> Result<ServiceDefinition, ParseError> {
     let input = InputStream::new(source);
     let lexer = ServiceDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -24,14 +25,14 @@ pub fn parse_service(source: &str) -> Result<ServiceDefinition, String> {
 
     let tree = parser
         .compilationUnit()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("ServiceDSL", format!("{e:?}")))?;
 
     build_compilation_unit(&*tree)
 }
 
 fn build_compilation_unit(
     ctx: &CompilationUnitContext<'_>,
-) -> Result<ServiceDefinition, String> {
+) -> Result<ServiceDefinition, ParseError> {
     let imports: Vec<ImportPath> = ctx
         .importStatement_all()
         .iter()
@@ -44,7 +45,7 @@ fn build_compilation_unit(
 
     let svc_ctx = ctx
         .serviceDefinition()
-        .ok_or_else(|| "Missing service definition".to_string())?;
+        .ok_or_else(|| ParseError::ast("ServiceDSL", "Missing service definition"))?;
 
     let mut def = build_service_definition(&*svc_ctx)?;
     def.imports = imports;
@@ -53,7 +54,7 @@ fn build_compilation_unit(
 
 fn build_service_definition(
     ctx: &ServiceDefinitionContext<'_>,
-) -> Result<ServiceDefinition, String> {
+) -> Result<ServiceDefinition, ParseError> {
     let name = ctx
         .IDENTIFIER()
         .map(|n| terminal_text(&*n))

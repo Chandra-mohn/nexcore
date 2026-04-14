@@ -12,9 +12,10 @@ use crate::ast::transform::*;
 use crate::generated::transformdsllexer::TransformDSLLexer;
 use crate::generated::transformdslparser::*;
 use crate::parse::helpers::{xform_text as terminal_text, unquote};
+use super::ParseError;
 
 /// Parse a `.xform` source string into a typed `TransformProgram`.
-pub fn parse_transform(source: &str) -> Result<TransformProgram, String> {
+pub fn parse_transform(source: &str) -> Result<TransformProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = TransformDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -22,12 +23,12 @@ pub fn parse_transform(source: &str) -> Result<TransformProgram, String> {
 
     let tree = parser
         .program()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("TransformDSL", format!("{e:?}")))?;
 
     build_program(&*tree)
 }
 
-fn build_program(ctx: &ProgramContext<'_>) -> Result<TransformProgram, String> {
+fn build_program(ctx: &ProgramContext<'_>) -> Result<TransformProgram, ParseError> {
     let imports: Vec<ImportPath> = ctx
         .importStatement_all()
         .iter()

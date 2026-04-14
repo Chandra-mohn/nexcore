@@ -14,9 +14,10 @@ use crate::ast::common::*;
 use crate::generated::apidsllexer::ApiDSLLexer;
 use crate::generated::apidslparser::*;
 use crate::parse::helpers::{api_text as terminal_text, unquote};
+use super::ParseError;
 
 /// Parse an `.api` source string into a typed `ApiDefinition`.
-pub fn parse_api(source: &str) -> Result<ApiDefinition, String> {
+pub fn parse_api(source: &str) -> Result<ApiDefinition, ParseError> {
     let input = InputStream::new(source);
     let lexer = ApiDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -24,12 +25,12 @@ pub fn parse_api(source: &str) -> Result<ApiDefinition, String> {
 
     let tree = parser
         .compilationUnit()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("ApiDSL", format!("{e:?}")))?;
 
     build_compilation_unit(&*tree)
 }
 
-fn build_compilation_unit(ctx: &CompilationUnitContext<'_>) -> Result<ApiDefinition, String> {
+fn build_compilation_unit(ctx: &CompilationUnitContext<'_>) -> Result<ApiDefinition, ParseError> {
     let imports: Vec<ImportPath> = ctx
         .importStatement_all()
         .iter()
@@ -38,23 +39,23 @@ fn build_compilation_unit(ctx: &CompilationUnitContext<'_>) -> Result<ApiDefinit
 
     let api_ctx = ctx
         .apiDefinition()
-        .ok_or_else(|| "Missing api definition".to_string())?;
+        .ok_or_else(|| ParseError::ast("ApiDSL", "Missing api definition"))?;
 
     let mut def = build_api_definition(&*api_ctx)?;
     def.imports = imports;
     Ok(def)
 }
 
-fn build_import(ctx: &ImportStatementContext<'_>) -> Result<ImportPath, String> {
+fn build_import(ctx: &ImportStatementContext<'_>) -> Result<ImportPath, ParseError> {
     let path_ctx = ctx
         .importPath()
-        .ok_or_else(|| "Missing import path".to_string())?;
+        .ok_or_else(|| ParseError::ast("ApiDSL", "Missing import path"))?;
     Ok(ImportPath {
         raw: path_ctx.get_text(),
     })
 }
 
-fn build_api_definition(ctx: &ApiDefinitionContext<'_>) -> Result<ApiDefinition, String> {
+fn build_api_definition(ctx: &ApiDefinitionContext<'_>) -> Result<ApiDefinition, ParseError> {
     let name = ctx
         .IDENTIFIER()
         .map(|n| terminal_text(&*n))

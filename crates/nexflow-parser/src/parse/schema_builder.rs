@@ -14,9 +14,10 @@ use crate::ast::schema::*;
 use crate::generated::schemadsllexer::SchemaDSLLexer;
 use crate::generated::schemadslparser::*;
 use crate::parse::helpers::{schema_text as terminal_text, unquote};
+use super::ParseError;
 
 /// Parse a `.schema` source string into a typed `SchemaProgram`.
-pub fn parse_schema(source: &str) -> Result<SchemaProgram, String> {
+pub fn parse_schema(source: &str) -> Result<SchemaProgram, ParseError> {
     let input = InputStream::new(source);
     let lexer = SchemaDSLLexer::new(input);
     let token_stream = CommonTokenStream::new(lexer);
@@ -24,12 +25,12 @@ pub fn parse_schema(source: &str) -> Result<SchemaProgram, String> {
 
     let tree = parser
         .program()
-        .map_err(|e| format!("Parse error: {e:?}"))?;
+        .map_err(|e| ParseError::grammar("SchemaDSL", format!("{e:?}")))?;
 
     build_program(&*tree)
 }
 
-fn build_program(ctx: &ProgramContext<'_>) -> Result<SchemaProgram, String> {
+fn build_program(ctx: &ProgramContext<'_>) -> Result<SchemaProgram, ParseError> {
     let imports: Vec<ImportPath> = ctx
         .importStatement_all()
         .iter()
@@ -61,7 +62,7 @@ fn build_program(ctx: &ProgramContext<'_>) -> Result<SchemaProgram, String> {
     })
 }
 
-fn build_schema_definition(ctx: &SchemaDefinitionContext<'_>) -> Result<SchemaDefinition, String> {
+fn build_schema_definition(ctx: &SchemaDefinitionContext<'_>) -> Result<SchemaDefinition, ParseError> {
     let name = ctx
         .schemaName()
         .map(|n| n.get_text())

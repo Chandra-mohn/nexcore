@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use nexflow_parser::ParseError;
 use nexflow_parser::ast::api::ApiDefinition;
 use nexflow_parser::ast::common::ImportPath;
 use nexflow_parser::ast::nexquery::NexQueryScript;
@@ -66,10 +67,10 @@ pub struct UnresolvedImport {
 /// and all transitively imported files are loaded. Files with extensions we
 /// don't have parsers for (.rules, .xform, .proc) are recorded as unresolved
 /// with an informational reason.
-pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), String> {
+pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), ParseError> {
     let root_path = root_path
         .canonicalize()
-        .map_err(|e| format!("Cannot resolve root path '{}': {e}", root_path.display()))?;
+        .map_err(|e| ParseError::ast("Resolver", format!("Cannot resolve root path '{}': {e}", root_path.display())))?;
 
     let mut project = Project {
         apis: Vec::new(),
@@ -119,7 +120,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -145,7 +146,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -171,7 +172,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -192,7 +193,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -213,7 +214,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -234,7 +235,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -250,7 +251,7 @@ pub fn load_project(root_path: &Path) -> Result<(Project, ValidationResult), Str
                             raw_path: file_path.display().to_string(),
                             resolved_path: Some(file_path.clone()),
                             source_file,
-                            reason: e,
+                            reason: e.to_string(),
                         });
                     }
                 }
@@ -290,55 +291,55 @@ fn resolve_import_path(base_dir: &Path, raw_import: &str) -> PathBuf {
     }
 }
 
-fn load_and_parse_api(path: &Path) -> Result<(ApiDefinition, Vec<ImportPath>), String> {
+fn load_and_parse_api(path: &Path) -> Result<(ApiDefinition, Vec<ImportPath>), ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("ApiDSL", format!("failed to read {}: {e}", path.display())))?;
     let api = nexflow_parser::parse_api(&source)?;
     let imports = api.imports.clone();
     Ok((api, imports))
 }
 
-fn load_and_parse_service(path: &Path) -> Result<(ServiceDefinition, Vec<ImportPath>), String> {
+fn load_and_parse_service(path: &Path) -> Result<(ServiceDefinition, Vec<ImportPath>), ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("ServiceDSL", format!("failed to read {}: {e}", path.display())))?;
     let service = nexflow_parser::parse_service(&source)?;
     let imports = service.imports.clone();
     Ok((service, imports))
 }
 
-fn load_and_parse_nexquery(path: &Path) -> Result<NexQueryScript, String> {
+fn load_and_parse_nexquery(path: &Path) -> Result<NexQueryScript, ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("NexQueryDSL", format!("failed to read {}: {e}", path.display())))?;
     nexflow_parser::parse_nexquery(&source)
 }
 
-fn load_and_parse_transform(path: &Path) -> Result<(TransformProgram, Vec<ImportPath>), String> {
+fn load_and_parse_transform(path: &Path) -> Result<(TransformProgram, Vec<ImportPath>), ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("TransformDSL", format!("failed to read {}: {e}", path.display())))?;
     let program = nexflow_parser::parse_transform(&source)?;
     let imports = program.imports.clone();
     Ok((program, imports))
 }
 
-fn load_and_parse_rules(path: &Path) -> Result<(RulesProgram, Vec<ImportPath>), String> {
+fn load_and_parse_rules(path: &Path) -> Result<(RulesProgram, Vec<ImportPath>), ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("RulesDSL", format!("failed to read {}: {e}", path.display())))?;
     let program = nexflow_parser::parse_rules(&source)?;
     let imports = program.imports.clone();
     Ok((program, imports))
 }
 
-fn load_and_parse_proc(path: &Path) -> Result<(ProcProgram, Vec<ImportPath>), String> {
+fn load_and_parse_proc(path: &Path) -> Result<(ProcProgram, Vec<ImportPath>), ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("ProcDSL", format!("failed to read {}: {e}", path.display())))?;
     let program = nexflow_parser::parse_proc(&source)?;
     let imports = program.imports.clone();
     Ok((program, imports))
 }
 
-fn load_and_parse_schema(path: &Path) -> Result<(SchemaProgram, Vec<ImportPath>), String> {
+fn load_and_parse_schema(path: &Path) -> Result<(SchemaProgram, Vec<ImportPath>), ParseError> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+        .map_err(|e| ParseError::ast("SchemaDSL", format!("failed to read {}: {e}", path.display())))?;
     let program = nexflow_parser::parse_schema(&source)?;
     let imports = program.imports.clone();
     Ok((program, imports))
@@ -346,7 +347,7 @@ fn load_and_parse_schema(path: &Path) -> Result<(SchemaProgram, Vec<ImportPath>)
 
 /// Load individual files by path (no import resolution).
 /// Useful for CLI when user specifies multiple files explicitly.
-pub fn load_files(paths: &[PathBuf]) -> Result<(Project, ValidationResult), String> {
+pub fn load_files(paths: &[PathBuf]) -> Result<(Project, ValidationResult), ParseError> {
     let mut project = Project {
         apis: Vec::new(),
         services: Vec::new(),

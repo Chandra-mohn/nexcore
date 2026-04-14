@@ -21,3 +21,37 @@ pub mod service_builder;
 pub mod transform_builder;
 
 mod helpers;
+
+/// Error returned when parsing a Nexflow DSL source fails.
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    /// ANTLR4 parser failed to produce a parse tree.
+    #[error("parse error in {grammar}: {message}")]
+    Grammar {
+        /// Which DSL grammar was being parsed (e.g., "ApiDSL", "SchemaDSL").
+        grammar: &'static str,
+        /// Human-readable error description.
+        message: String,
+    },
+
+    /// Parse tree was produced but AST construction failed (missing required node).
+    #[error("{grammar}: {message}")]
+    Ast {
+        /// Which DSL grammar was being parsed.
+        grammar: &'static str,
+        /// What went wrong during AST construction.
+        message: String,
+    },
+}
+
+impl ParseError {
+    /// Create a grammar-level parse error.
+    pub fn grammar(grammar: &'static str, message: impl Into<String>) -> Self {
+        Self::Grammar { grammar, message: message.into() }
+    }
+
+    /// Create an AST construction error.
+    pub fn ast(grammar: &'static str, message: impl Into<String>) -> Self {
+        Self::Ast { grammar, message: message.into() }
+    }
+}

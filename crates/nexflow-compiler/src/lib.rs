@@ -22,5 +22,6 @@ pub mod resolve;
 pub mod validate;
 
 pub use diagnostics::{Diagnostic, DiagnosticLevel, ValidationResult};
+pub use nexflow_parser::ParseError;
 pub use resolve::{load_files, load_project, Project};
 pub use validate::validate;
