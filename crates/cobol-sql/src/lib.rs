@@ -15,9 +15,13 @@ mod sqlca;
 #[cfg(feature = "duckdb")]
 mod duckdb_runtime;
 
+#[doc(inline)]
 pub use host_var::{HostVar, HostVarMut};
+#[doc(inline)]
 pub use runtime::CobolSqlRuntime;
+#[doc(inline)]
 pub use sqlca::{Sqlca, SqlErrm, SqlWarnings};
 
 #[cfg(feature = "duckdb")]
+#[doc(inline)]
 pub use duckdb_runtime::DuckDbRuntime;

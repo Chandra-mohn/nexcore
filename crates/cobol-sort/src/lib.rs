@@ -33,13 +33,20 @@ pub mod sort_key;
 pub mod sort_return;
 
 // Re-export public API
+#[doc(inline)]
 pub use collating::CollatingTable;
+#[doc(inline)]
 pub use config::SortConfig;
+#[doc(inline)]
 pub use merge::CobolMergeEngine;
+#[doc(inline)]
 pub use procedure::{
     sort_with_input_procedure, sort_with_output_procedure, sort_with_procedures, Releaser,
     Returner,
 };
+#[doc(inline)]
 pub use sort_engine::CobolSortEngine;
+#[doc(inline)]
 pub use sort_key::{RecordComparator, SharedComparator, SortKeySpec, SortKeyType};
+#[doc(inline)]
 pub use sort_return::SortReturn;

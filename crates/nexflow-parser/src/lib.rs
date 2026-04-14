@@ -21,11 +21,19 @@ pub mod generated;
 pub mod parse;
 
 // Re-export the main parse functions and error type for convenience.
+#[doc(inline)]
 pub use parse::api_builder::parse_api;
+#[doc(inline)]
 pub use parse::nexquery_builder::parse_nexquery;
+#[doc(inline)]
 pub use parse::proc_builder::parse_proc;
+#[doc(inline)]
 pub use parse::rules_builder::parse_rules;
+#[doc(inline)]
 pub use parse::schema_builder::parse_schema;
+#[doc(inline)]
 pub use parse::service_builder::parse_service;
+#[doc(inline)]
 pub use parse::transform_builder::parse_transform;
+#[doc(inline)]
 pub use parse::ParseError;

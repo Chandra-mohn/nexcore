@@ -19,10 +19,17 @@ pub mod redefines;
 pub mod session;
 
 // Re-export key types for convenience.
+#[doc(inline)]
 pub use decode::DecodedValue;
+#[doc(inline)]
 pub use encoding::Encoding;
+#[doc(inline)]
 pub use error::{DataError, Result};
+#[doc(inline)]
 pub use export::ExportFormat;
+#[doc(inline)]
 pub use record::DecodedRecord;
+#[doc(inline)]
 pub use redefines::{Confidence, Discriminator, RedefinesGroup};
+#[doc(inline)]
 pub use session::{FileAccess, NativeFileAccess, ViewerSession};

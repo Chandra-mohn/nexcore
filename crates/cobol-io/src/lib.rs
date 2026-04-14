@@ -12,10 +12,16 @@ pub mod resolver;
 pub mod sequential;
 
 // Re-export public API
+#[doc(inline)]
 pub use file_status::FileStatusCode;
+#[doc(inline)]
 pub use file_traits::{CobolFile, FileAccessMode, FileOpenMode, FileOrganization};
 #[cfg(feature = "sqlite")]
+#[doc(inline)]
 pub use indexed::IndexedFile;
+#[doc(inline)]
 pub use relative::RelativeFile;
+#[doc(inline)]
 pub use resolver::FileResolver;
+#[doc(inline)]
 pub use sequential::SequentialFile;
