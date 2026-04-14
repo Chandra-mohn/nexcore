@@ -29,11 +29,18 @@ enum SortState {
 ///
 /// Starts in-memory, auto-switches to external merge sort when the memory
 /// limit is exceeded. This mirrors IBM DFSORT's adaptive behavior.
-#[allow(missing_debug_implementations)]
 pub struct CobolSortEngine {
     state: SortState,
     config: SortConfig,
     comparator: SharedComparator,
+}
+
+impl std::fmt::Debug for CobolSortEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CobolSortEngine")
+            .field("config", &self.config)
+            .finish()
+    }
 }
 
 impl CobolSortEngine {

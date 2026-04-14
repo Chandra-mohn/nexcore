@@ -20,9 +20,14 @@ use crate::sort_return::SortReturn;
 ///
 /// Merges multiple pre-sorted input sources into a single sorted output.
 /// Each input must already be sorted on the same keys.
-#[allow(missing_debug_implementations)]
 pub struct CobolMergeEngine {
     comparator: SharedComparator,
+}
+
+impl std::fmt::Debug for CobolMergeEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CobolMergeEngine").finish()
+    }
 }
 
 impl CobolMergeEngine {

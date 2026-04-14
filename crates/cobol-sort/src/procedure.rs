@@ -19,7 +19,7 @@ use crate::sort_return::SortReturn;
 ///
 /// The INPUT PROCEDURE receives a `&mut Releaser` and calls `release()`
 /// for each record it wants to feed into the sort.
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct Releaser {
     records: Vec<Vec<u8>>,
 }
@@ -48,7 +48,7 @@ impl Releaser {
 /// The OUTPUT PROCEDURE receives a `&mut Returner` and calls `return_record()`
 /// to get each sorted record. Returns `None` when all records are consumed
 /// (AT END condition).
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct Returner {
     records: Vec<Vec<u8>>,
     cursor: usize,

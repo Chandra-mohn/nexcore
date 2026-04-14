@@ -16,7 +16,6 @@ use crate::sort_key::SharedComparator;
 /// Phase 1 (run generation): buffer records in memory until the memory limit
 /// is reached, sort the buffer, and flush to a temporary file.
 /// Phase 2 (k-way merge): open all run files and merge them using a min-heap.
-#[allow(missing_debug_implementations)]
 pub struct ExternalMergeSort {
     run_files: Vec<NamedTempFile>,
     memory_limit: usize,
@@ -28,6 +27,20 @@ pub struct ExternalMergeSort {
     /// Current in-memory buffer for building the next run.
     buffer: Vec<Vec<u8>>,
     buffer_bytes: usize,
+}
+
+impl std::fmt::Debug for ExternalMergeSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalMergeSort")
+            .field("run_files", &self.run_files.len())
+            .field("memory_limit", &self.memory_limit)
+            .field("fan_in", &self.fan_in)
+            .field("record_length", &self.record_length)
+            .field("stable", &self.stable)
+            .field("buffer_len", &self.buffer.len())
+            .field("buffer_bytes", &self.buffer_bytes)
+            .finish()
+    }
 }
 
 impl ExternalMergeSort {

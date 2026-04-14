@@ -6,12 +6,21 @@
 use crate::sort_key::RecordComparator;
 
 /// In-memory sort engine for datasets that fit in memory.
-#[allow(missing_debug_implementations)]
 pub struct InMemorySort {
     records: Vec<Vec<u8>>,
     comparator: RecordComparator,
     stable: bool,
     sorted: bool,
+}
+
+impl std::fmt::Debug for InMemorySort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemorySort")
+            .field("records", &self.records.len())
+            .field("stable", &self.stable)
+            .field("sorted", &self.sorted)
+            .finish()
+    }
 }
 
 impl InMemorySort {
