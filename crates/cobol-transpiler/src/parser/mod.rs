@@ -136,6 +136,11 @@ pub fn parse_cobol_from_source(source: &str) -> Result<CobolProgram> {
 ///
 /// Like `parse_cobol()`, but additionally returns diagnostics for
 /// unhandled statements, parse errors, and coverage gaps.
+///
+/// # Errors
+///
+/// Returns `TranspileError::Preprocess` if source preprocessing fails.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
 pub fn parse_cobol_with_diagnostics(source: &str) -> Result<(CobolProgram, Vec<TranspileDiagnostic>)> {
     let preprocessed = preprocess(source)?;
     let exec_blocks = drain_exec_blocks();
@@ -178,6 +183,11 @@ pub fn parse_cobol_with_diagnostics(source: &str) -> Result<(CobolProgram, Vec<T
 ///
 /// Like `parse_cobol_with_diagnostics()`, but also captures ANTLR lexer/parser
 /// token recognition errors (e.g., unrecognized characters like `#`, `@`, `~`).
+///
+/// # Errors
+///
+/// Returns `TranspileError::Preprocess` if source preprocessing fails.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
 pub fn parse_cobol_with_token_errors(
     source: &str,
 ) -> Result<(CobolProgram, Vec<TranspileDiagnostic>, Vec<TokenError>)> {

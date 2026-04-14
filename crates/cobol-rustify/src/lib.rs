@@ -55,11 +55,7 @@ pub fn analyze_workspace(config: &RustifyConfig) -> Result<AnalysisReport, Rusti
         let parsed = match syn::parse_file(&source_text) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!(
-                    "warning: skipping {} (parse error: {})",
-                    file_path.display(),
-                    e
-                );
+                tracing::warn!(path = %file_path.display(), error = %e, "skipping file due to parse error");
                 continue;
             }
         };
@@ -195,11 +191,7 @@ pub fn apply_workspace(config: &RustifyConfig) -> Result<ApplyReport, RustifyErr
         let parsed = match syn::parse_file(&source_text) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!(
-                    "warning: skipping {} (parse error: {})",
-                    file_path.display(),
-                    e
-                );
+                tracing::warn!(path = %file_path.display(), error = %e, "skipping file due to parse error");
                 continue;
             }
         };
@@ -426,7 +418,7 @@ pub fn emit_dsl_for_workspace(output_dir: &Path) -> Result<Vec<dsl::writer::DslW
         let syn_file = match syn::parse_str::<syn::File>(&source_text) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("[WARN] Cannot parse Rust file {}: {e}", rs_path.display());
+                tracing::warn!(path = %rs_path.display(), error = %e, "Cannot parse Rust file");
                 continue;
             }
         };

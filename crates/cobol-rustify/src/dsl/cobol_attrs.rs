@@ -80,7 +80,7 @@ pub fn extract_field_attr(attrs: &[syn::Attribute]) -> Option<FieldCobolAttr> {
             .and_then(|v| match v.parse::<u8>() {
                 Ok(l) => Some(l),
                 Err(_) => {
-                    eprintln!("[WARN] Invalid #[cobol(level=...)] value: '{v}'");
+                    tracing::warn!(value = %v, "Invalid #[cobol(level=...)] value");
                     None
                 }
             })

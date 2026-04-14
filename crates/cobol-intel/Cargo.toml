@@ -32,6 +32,9 @@ miette = { workspace = true }
 # REPL
 rustyline = "15"
 
+# Logging
+tracing = { workspace = true }
+
 # Internal crates
 cobol-core = { workspace = true }
 cobol-transpiler = { workspace = true }

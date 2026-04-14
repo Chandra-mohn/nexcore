@@ -178,18 +178,21 @@ impl ComparisonReport {
     pub fn print_summary(&self) {
         let total = self.matches.len() + self.mismatches.len()
             + self.legacy_only.len() + self.direct_only.len();
-        eprintln!(
-            "[compare] {} files: {} match, {} mismatch, {} legacy-only, {} direct-only",
-            total,
-            self.matches.len(),
-            self.mismatches.len(),
-            self.legacy_only.len(),
-            self.direct_only.len(),
+        tracing::info!(
+            total = total,
+            matches = self.matches.len(),
+            mismatches = self.mismatches.len(),
+            legacy_only = self.legacy_only.len(),
+            direct_only = self.direct_only.len(),
+            "DSL comparison complete",
         );
         for m in &self.mismatches {
-            eprintln!(
-                "  [DIFF] {} (line {}): legacy={} lines, direct={} lines",
-                m.path, m.first_diff_line, m.legacy_lines, m.direct_lines,
+            tracing::warn!(
+                path = %m.path,
+                first_diff_line = m.first_diff_line,
+                legacy_lines = m.legacy_lines,
+                direct_lines = m.direct_lines,
+                "DSL mismatch",
             );
         }
     }

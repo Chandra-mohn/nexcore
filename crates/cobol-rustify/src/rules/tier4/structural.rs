@@ -135,7 +135,7 @@ pub fn apply_plan(
             file.parsed = match syn::parse_file(new_content) {
                 Ok(f) => Some(f),
                 Err(e) => {
-                    eprintln!("[WARN] Rust parse failed for {path}: {e}");
+                    tracing::warn!(path = %path, error = %e, "Rust parse failed");
                     None
                 }
             };
@@ -155,7 +155,7 @@ pub fn apply_plan(
                 parsed: match syn::parse_file(content) {
                     Ok(f) => Some(f),
                     Err(e) => {
-                        eprintln!("[WARN] Rust parse failed for {path}: {e}");
+                        tracing::warn!(path = %path, error = %e, "Rust parse failed");
                         None
                     }
                 },

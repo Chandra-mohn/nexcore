@@ -246,7 +246,7 @@ impl<'input> Cobol85Listener<'input> for FileListener {
             match text.parse::<u8>() {
                 Ok(l) => l,
                 Err(_) => {
-                    eprintln!("[WARN] FD: invalid level number '{text}'");
+                    tracing::warn!(text = %text, "FD: invalid level number");
                     return;
                 }
             }

@@ -122,7 +122,7 @@ impl<F: FileAccess> ViewerSession<F> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[WARN] Failed to parse program source for discriminator detection: {e}");
+                    tracing::warn!(error = %e, "Failed to parse program source for discriminator detection");
                 }
             }
         }
@@ -139,7 +139,7 @@ impl<F: FileAccess> ViewerSession<F> {
                         self.encoding = Some(encoding::detect_encoding(&sample, &entries));
                     }
                     Err(e) => {
-                        eprintln!("[WARN] Cannot read sample for encoding detection: {e}");
+                        tracing::warn!(error = %e, "Cannot read sample for encoding detection");
                     }
                 }
             }

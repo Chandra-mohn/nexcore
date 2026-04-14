@@ -222,10 +222,7 @@ pub fn parse_bms(source: &str) -> Result<BmsMapset> {
                 if let Some(ref mut map) = current_map {
                     map.fields.push(field);
                 } else {
-                    eprintln!(
-                        "[WARN] BMS line {}: DFHMDF outside of any map, skipping",
-                        line_num + 1
-                    );
+                    tracing::warn!(line = line_num + 1, "BMS: DFHMDF outside of any map, skipping");
                 }
             }
             "TITLE" | "END" => {
@@ -233,10 +230,7 @@ pub fn parse_bms(source: &str) -> Result<BmsMapset> {
             }
             other => {
                 if !other.is_empty() {
-                    eprintln!(
-                        "[WARN] BMS line {}: unknown macro type '{other}', skipping",
-                        line_num + 1
-                    );
+                    tracing::warn!(line = line_num + 1, macro_type = %other, "BMS: unknown macro type, skipping");
                 }
             }
         }

@@ -261,7 +261,7 @@ fn transform_inline(source: &str, threshold: usize, collapse_chains: bool) -> Op
             let calls = detect_calls(&result, name, &fn_names);
             if calls.len() == 1 {
                 let body = extract_fn_body(&result, name).unwrap_or_else(|| {
-                    eprintln!("[WARN] Cannot extract body for function '{name}' during dispatch collapse");
+                    tracing::warn!(function = %name, "Cannot extract body for function during dispatch collapse");
                     String::new()
                 });
                 let body_trimmed = body.trim();

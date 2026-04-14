@@ -93,7 +93,7 @@ pub fn scan_bms_references(source_dir: &Path, extensions: &[&str]) -> BmsXref {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[WARN] Cannot read {}: {e}", path.display());
+                tracing::warn!(path = %path.display(), error = %e, "Cannot read source file");
                 continue;
             }
         };

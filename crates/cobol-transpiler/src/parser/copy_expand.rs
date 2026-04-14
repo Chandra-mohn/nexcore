@@ -593,7 +593,7 @@ impl CopyExpander {
                 }
                 Err(e) => {
                     if !matches!(e, crate::error::TranspileError::CopyNotFound { .. }) {
-                        eprintln!("[WARN] Error reading copybook {name_upper}: {e}");
+                        tracing::warn!(copybook = %name_upper, error = %e, "Error reading copybook");
                     }
                     missing.insert(name_upper);
                 }

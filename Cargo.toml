@@ -84,6 +84,10 @@ hkdf = "0.12"
 rand = "0.8"
 rustyline = "15"
 
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 # Allocator
 mimalloc = "0.1"
 
