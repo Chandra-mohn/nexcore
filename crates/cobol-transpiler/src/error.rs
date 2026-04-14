@@ -2,6 +2,8 @@
 //!
 //! Covers all phases: preprocessing, parsing (ANTLR4), semantic analysis,
 //! and code generation.
+//!
+//! Backtrace: set `RUST_BACKTRACE=1` for stack traces via miette diagnostics.
 
 use std::path::PathBuf;
 
@@ -12,6 +14,10 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, TranspileError>;
 
 /// Top-level transpiler error.
+///
+/// # Backtrace
+///
+/// Set `RUST_BACKTRACE=1` to capture backtraces via miette diagnostics.
 #[derive(Debug, Error, Diagnostic)]
 pub enum TranspileError {
     /// Error during COBOL source preprocessing (fixed-format handling).

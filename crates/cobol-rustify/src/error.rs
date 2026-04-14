@@ -1,9 +1,15 @@
 //! Error types for the rustify crate.
+//!
+//! Backtrace: set `RUST_BACKTRACE=1` for stack traces via miette diagnostics.
 
 use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors that can occur during rustification.
+///
+/// # Backtrace
+///
+/// Set `RUST_BACKTRACE=1` to capture backtraces via miette diagnostics.
 #[derive(Error, Debug)]
 pub enum RustifyError {
     #[error("I/O error: {0}")]
