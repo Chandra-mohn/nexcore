@@ -1,4 +1,9 @@
-//! cobol2rust CLI: transpile COBOL to Rust, validate, preprocess.
+//! NexMig CLI: transpile COBOL to Rust/Java, validate, analyze, emit DSL.
+
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 mod analyze;
 mod audit_cmd;

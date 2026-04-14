@@ -37,3 +37,4 @@ num_cpus = { workspace = true }
 ctrlc = { workspace = true }
 glob = { workspace = true }
 toml = { workspace = true }
+mimalloc = { workspace = true }

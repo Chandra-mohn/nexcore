@@ -15,6 +15,11 @@
 //! - `clean`    -- Remove generated files
 //! - `info`     -- Show project information
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 mod format;
 mod project;
 
