@@ -202,14 +202,14 @@ fn build_receive_decl(ctx: &ReceiveDeclContext<'_>) -> ProcessStatement {
     let mut source = String::new();
     let mut schema = None;
     let mut key = None;
-    let mut options = Vec::new();
+    let options = Vec::new();
 
     for clause in ctx.receiveClause_all() {
         if let Some(sd) = clause.schemaDecl() {
             schema = Some(sd.get_text().replace("schema", "").trim().to_string());
         }
         if let Some(cc) = clause.connectorClause() {
-            let cc_text = cc.get_text();
+            let _cc_text = cc.get_text();
             // Connector type
             if let Some(ct) = cc.connectorType() {
                 source_type = ct.get_text();

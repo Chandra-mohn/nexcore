@@ -725,7 +725,7 @@ fn resolve_renames_type_from_entry(
     renames_entry: &DataEntry,
     record: &DataEntry,
 ) -> crate::symbol_table::ResolvedType {
-    use crate::symbol_table::{ResolvedType, RustType};
+    use crate::symbol_table::ResolvedType;
 
     let target_name = match &renames_entry.renames_target {
         Some(name) => name.to_uppercase(),

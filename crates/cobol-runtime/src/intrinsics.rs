@@ -4,7 +4,6 @@
 //! codegen pattern in proc_gen.rs. Functions are split into numeric
 //! (returning Decimal) and string (returning Vec<u8>) categories.
 
-use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
 
 // ---------------------------------------------------------------------------

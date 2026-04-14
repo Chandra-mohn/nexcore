@@ -12,6 +12,7 @@ use nexflow_parser::ast::service::ServiceDefinition;
 use crate::diagnostics::{DiagnosticSource, ValidationResult};
 
 /// Input to the validator: parsed ASTs from all three grammar types.
+#[derive(Debug)]
 pub struct ValidationInput<'a> {
     pub apis: &'a [ApiDefinition],
     pub services: &'a [ServiceDefinition],

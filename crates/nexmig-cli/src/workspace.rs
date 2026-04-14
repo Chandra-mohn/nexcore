@@ -11,8 +11,6 @@ use std::sync::Mutex;
 use miette::{miette, Context, IntoDiagnostic, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use toml;
-
 use cobol_transpiler::ast::{Literal, Operand, Statement};
 use cobol_transpiler::parser::preprocess::preprocess;
 use cobol_transpiler::parser::{extract_copy_targets, extract_program_id, parse_cobol};
