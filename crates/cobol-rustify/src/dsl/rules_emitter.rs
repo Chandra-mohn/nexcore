@@ -89,6 +89,8 @@ pub enum RuleShape {
         arm_count: usize,
         /// Scrutinee expression (what is being matched)
         scrutinee: String,
+        /// Extracted conditions and actions from each WHEN branch
+        branches: Vec<ExtractedBranch>,
     },
     /// `if/else if` chain that looks tabular -> decision_table
     #[allow(dead_code)]
@@ -262,6 +264,7 @@ fn analyze_expr(expr: &syn::Expr) -> Option<RuleShape> {
                 Some(RuleShape::DecisionTable {
                     arm_count,
                     scrutinee,
+                    branches: vec![],
                 })
             } else {
                 None
@@ -457,8 +460,8 @@ pub fn generate_rules_file(
 
     for r in rules {
         match &r.shape {
-            RuleShape::DecisionTable { arm_count, scrutinee } => {
-                let (dt, note) = build_match_decision_table(r, *arm_count, scrutinee);
+            RuleShape::DecisionTable { arm_count, scrutinee, branches } => {
+                let (dt, note) = build_match_decision_table(r, *arm_count, scrutinee, branches);
                 items.push(RuleItem::DecisionTable(dt));
                 notes.push(note);
             }
@@ -520,9 +523,57 @@ fn build_match_decision_table(
     r: &RuleCandidate,
     arm_count: usize,
     scrutinee: &str,
+    branches: &[ExtractedBranch],
 ) -> (dsl_ast::DecisionTable, String) {
     use super::dsl_ast::*;
 
+    // If we have extracted branches, use them (same logic as tabular)
+    if !branches.is_empty() {
+        let mut action_col_names: Vec<String> = Vec::new();
+        for (_, actions) in branches {
+            for (field, _) in actions {
+                if !action_col_names.contains(field) {
+                    action_col_names.push(field.clone());
+                }
+            }
+        }
+        if action_col_names.is_empty() {
+            action_col_names.push("result".to_string());
+        }
+
+        let action_idents: Vec<Ident> = action_col_names.iter().map(|n| Ident::new(n)).collect();
+
+        let rows: Vec<DecideRow> = branches.iter().map(|(condition, actions)| {
+            let action_values: Vec<String> = action_col_names.iter().map(|col| {
+                actions.iter()
+                    .find(|(f, _)| f == col)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_else(|| "*".to_string())
+            }).collect();
+            DecideRow {
+                condition: condition.clone(),
+                actions: action_values,
+            }
+        }).collect();
+
+        let dt = DecisionTable {
+            name: Ident::new(&r.nexflow_name),
+            comment: Some(format!("COBOL paragraph: {} (EVALUATE {}, {} arms)", r.cobol_name, scrutinee, arm_count)),
+            hit_policy: HitPolicy::FirstMatch,
+            given: build_given_params(r),
+            decide: DecideMatrix {
+                condition_col: scrutinee.to_string(),
+                action_cols: action_idents,
+                rows,
+            },
+            return_params: build_return_params(r),
+        };
+
+        let note = format!("{}: EVALUATE decision table with {} extracted rows", r.cobol_name, branches.len());
+        return (dt, note);
+    }
+
+    // Fallback: no extracted branches (should not happen with direct emitter)
     let action_col_names: Vec<Ident> = if r.writes.is_empty() {
         vec![Ident::new("result")]
     } else {
@@ -548,7 +599,7 @@ fn build_match_decision_table(
         return_params: build_return_params(r),
     };
 
-    let note = format!("{}: match-based decision table with {} placeholder rows", r.cobol_name, row_count);
+    let note = format!("{}: EVALUATE decision table with {} placeholder rows (extraction failed)", r.cobol_name, row_count);
     (dt, note)
 }
 

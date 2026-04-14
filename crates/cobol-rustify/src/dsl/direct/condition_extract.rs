@@ -47,9 +47,24 @@ pub fn condition_to_string(cond: &Condition) -> String {
 /// Convert an `Operand` to a DSL expression string.
 pub fn operand_to_string(op: &Operand) -> String {
     match op {
-        Operand::DataRef(dr) => dr.name.to_lowercase().replace('-', "_"),
+        Operand::DataRef(dr) => {
+            let base = dr.name.to_lowercase().replace('-', "_");
+            if dr.subscripts.is_empty() {
+                base
+            } else {
+                let subs: Vec<String> = dr.subscripts.iter().map(|s| match s {
+                    cobol_transpiler::ast::Subscript::IntLiteral(n) => n.to_string(),
+                    cobol_transpiler::ast::Subscript::DataRef(dr) => dr.name.to_lowercase().replace('-', "_"),
+                    cobol_transpiler::ast::Subscript::Expr(expr) => arith_expr_to_string(expr),
+                }).collect();
+                format!("{base}({})", subs.join(", "))
+            }
+        }
         Operand::Literal(lit) => literal_to_string(lit),
-        Operand::Function(fc) => format!("{}()", fc.name.to_lowercase()),
+        Operand::Function(fc) => {
+            let args: Vec<String> = fc.arguments.iter().map(operand_to_string).collect();
+            format!("{}({})", fc.name.to_lowercase(), args.join(", "))
+        }
     }
 }
 
@@ -57,7 +72,20 @@ fn literal_to_string(lit: &Literal) -> String {
     match lit {
         Literal::Numeric(s) => s.clone(),
         Literal::Alphanumeric(s) => format!("\"{s}\""),
-        Literal::Figurative(fc) => format!("{fc:?}").to_lowercase(),
+        Literal::Figurative(fc) => figurative_to_string(fc),
+    }
+}
+
+fn figurative_to_string(fc: &cobol_transpiler::ast::FigurativeConstant) -> String {
+    use cobol_transpiler::ast::FigurativeConstant;
+    match fc {
+        FigurativeConstant::Spaces => "spaces".to_string(),
+        FigurativeConstant::Zeros => "0".to_string(),
+        FigurativeConstant::HighValues => "high_values".to_string(),
+        FigurativeConstant::LowValues => "low_values".to_string(),
+        FigurativeConstant::Quotes => "\"".to_string(),
+        FigurativeConstant::Nulls => "null".to_string(),
+        FigurativeConstant::All(s) => format!("all(\"{s}\")"),
     }
 }
 
@@ -237,6 +265,43 @@ fn extract_mappings_from_stmt(stmt: &Statement, out: &mut Vec<ExtractedMapping>)
                 });
             }
         }
+        Statement::Set(set) => {
+            let value = match &set.action {
+                cobol_transpiler::ast::SetAction::To(op) => operand_to_string(op),
+                cobol_transpiler::ast::SetAction::UpBy(op) => {
+                    let v = operand_to_string(op);
+                    // SET x UP BY n -> x = x + n (return early for each target)
+                    for target in &set.targets {
+                        let tgt = target.name.to_lowercase().replace('-', "_");
+                        out.push(ExtractedMapping {
+                            target: tgt.clone(),
+                            expr: format!("{tgt} + {v}"),
+                        });
+                    }
+                    return;
+                }
+                cobol_transpiler::ast::SetAction::DownBy(op) => {
+                    let v = operand_to_string(op);
+                    for target in &set.targets {
+                        let tgt = target.name.to_lowercase().replace('-', "_");
+                        out.push(ExtractedMapping {
+                            target: tgt.clone(),
+                            expr: format!("{tgt} - {v}"),
+                        });
+                    }
+                    return;
+                }
+                cobol_transpiler::ast::SetAction::ToBool(b) => {
+                    if *b { "true" } else { "false" }.to_string()
+                }
+            };
+            for target in &set.targets {
+                out.push(ExtractedMapping {
+                    target: target.name.to_lowercase().replace('-', "_"),
+                    expr: value.clone(),
+                });
+            }
+        }
         // Recurse into control flow
         Statement::If(if_stmt) => {
             extract_mappings_from_stmts(&if_stmt.then_body, out);
@@ -256,6 +321,10 @@ fn extract_mappings_from_stmts(stmts: &[Statement], out: &mut Vec<ExtractedMappi
 }
 
 /// Extract a `RuleShape` from a COBOL EVALUATE statement.
+///
+/// Converts each WHEN branch into a `(condition, actions)` pair where the
+/// condition is the WHEN value as a string and actions are field assignments
+/// extracted from the branch body.
 pub fn evaluate_to_rule_shape(eval: &EvaluateStatement) -> RuleShape {
     let scrutinee = eval
         .subjects
@@ -270,9 +339,42 @@ pub fn evaluate_to_rule_shape(eval: &EvaluateStatement) -> RuleShape {
     let arm_count = eval.when_branches.len()
         + if eval.when_other.is_empty() { 0 } else { 1 };
 
+    // Extract real branches from WHEN clauses
+    let mut branches = Vec::new();
+    for when in &eval.when_branches {
+        let condition = when
+            .values
+            .iter()
+            .map(when_value_to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let actions = extract_move_actions(&when.body);
+        branches.push((condition, actions));
+    }
+
+    // WHEN OTHER -> else branch
+    if !eval.when_other.is_empty() {
+        let actions = extract_move_actions(&eval.when_other);
+        branches.push(("otherwise".to_string(), actions));
+    }
+
     RuleShape::DecisionTable {
         arm_count,
         scrutinee,
+        branches,
+    }
+}
+
+/// Convert a `WhenValue` to a DSL condition string.
+fn when_value_to_string(wv: &cobol_transpiler::ast::WhenValue) -> String {
+    use cobol_transpiler::ast::WhenValue;
+    match wv {
+        WhenValue::Value(op) => operand_to_string(op),
+        WhenValue::Range { low, high } => {
+            format!("{} thru {}", operand_to_string(low), operand_to_string(high))
+        }
+        WhenValue::Condition(cond) => condition_to_string(cond),
+        WhenValue::Any => "*".to_string(),
     }
 }
 
