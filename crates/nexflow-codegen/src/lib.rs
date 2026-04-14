@@ -16,6 +16,12 @@
 //! **Java target** (Avro + Maven + Flink):
 //! - `java::generate_java_schemas()` for Java/Avro projects (L2)
 
+// Note: codegen modules use `writeln!(out, ...).unwrap()` extensively.
+// This is safe because `fmt::Write for String` is infallible -- writing
+// to a String buffer never fails. Converting these to `?` propagation
+// would require all codegen functions to return `fmt::Result`, which
+// adds complexity with zero safety benefit.
+
 pub mod gen_error;
 pub mod gen_handler;
 pub mod gen_middleware;
