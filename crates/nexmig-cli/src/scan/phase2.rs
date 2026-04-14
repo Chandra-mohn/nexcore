@@ -1,7 +1,5 @@
 //! Phase 2: Coverage -- run transpilation analysis on parseable files.
 
-#[cfg(feature = "duckdb")]
-use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
