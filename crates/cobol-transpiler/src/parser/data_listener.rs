@@ -4,7 +4,7 @@
 //! `dataDescriptionEntryFormat3` (level 88 conditions). Collects flat
 //! items that are later assembled into a hierarchy by [`super::hierarchy`].
 
-#![allow(clippy::wildcard_imports)] // Generated ANTLR4 code has enormous trait lists
+#![expect(clippy::wildcard_imports, reason = "ANTLR4 generated trait lists require wildcard imports")]
 
 use antlr_rust::tree::{ParseTree, ParseTreeListener};
 

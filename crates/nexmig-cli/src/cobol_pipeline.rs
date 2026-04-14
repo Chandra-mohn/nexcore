@@ -4,7 +4,7 @@
 //! All CLI commands that need to expand COPY statements or parse COBOL
 //! should use these functions instead of creating their own resolver/expander.
 
-#![allow(dead_code)] // Functions/fields used as commands are migrated.
+#![expect(dead_code, reason = "pipeline functions are used incrementally as CLI commands are migrated")]
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

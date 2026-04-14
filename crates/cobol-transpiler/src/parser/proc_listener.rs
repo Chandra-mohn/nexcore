@@ -5,7 +5,7 @@
 //! - Recursive extraction functions walk the context tree for nested statements
 //! - This naturally handles IF/EVALUATE/PERFORM nesting without complex stack management
 
-#![allow(clippy::wildcard_imports)] // Generated ANTLR4 code has enormous trait lists
+#![expect(clippy::wildcard_imports, reason = "ANTLR4 generated trait lists require wildcard imports")]
 
 use std::cell::RefCell;
 

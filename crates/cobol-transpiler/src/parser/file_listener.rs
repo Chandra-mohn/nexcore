@@ -7,7 +7,7 @@
 //! needs to capture file-level metadata (organization, access mode, keys,
 //! assign-to, etc.) plus the FD-to-file-name associations.
 
-#![allow(clippy::wildcard_imports)] // Generated ANTLR4 code has enormous trait lists
+#![expect(clippy::wildcard_imports, reason = "ANTLR4 generated trait lists require wildcard imports")]
 
 use std::collections::HashMap;
 
