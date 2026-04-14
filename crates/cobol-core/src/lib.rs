@@ -9,6 +9,7 @@ pub mod decimal_ext;
 pub mod ebcdic;
 pub mod editing;
 pub mod error;
+pub mod identifiers;
 pub mod numeric_parse;
 pub mod traits;
 
@@ -26,5 +27,7 @@ pub use ebcdic::CodePage;
 pub use editing::EditSymbol;
 #[doc(inline)]
 pub use error::{ArithError, CallError, CobolError, DataError, FileError, SortError};
+#[doc(inline)]
+pub use identifiers::{CopybookName, FieldName, ParagraphName, ProgramName};
 #[doc(inline)]
 pub use traits::{CobolField, CobolGroup, CobolNumeric, CobolNumericEdited};
