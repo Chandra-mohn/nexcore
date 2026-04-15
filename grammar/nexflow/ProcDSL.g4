@@ -645,14 +645,10 @@ joinDecl
         (INTO IDENTIFIER)?                                     // GAP-02: output naming
     ;
 
-// Join condition: symmetric (shared field names) or asymmetric (left = right pairs)
+// Join condition: simple field list or full boolean expression
 joinCondition
-    : fieldList                                                // Symmetric: on customer_id, region
-    | joinKeyPair (COMMA joinKeyPair)*                         // Asymmetric: on cust_id = customer_id
-    ;
-
-joinKeyPair
-    : fieldPath ASSIGN fieldPath                               // left_field = right_field
+    : fieldList                                                // Simple: on customer_id, region
+    | expression                                               // Full: on txn.id == acct.id and txn.cur == acct.cur
     ;
 
 joinType

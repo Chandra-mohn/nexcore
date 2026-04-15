@@ -12,19 +12,29 @@ Reference: `~/workspace/nexflow/nexflow-toolchain/docs/PROC-GRAMMAR-GAP-ANALYSIS
 join orders with customers on customer_id within 5 minutes
 ```
 
-**After:** Left and right sides can have different field names.
+**After:** Full boolean expression support for join conditions.
 ```
+// Simple equality (different field names)
 join orders with customers
-    on order.cust_id = customer.customer_id
+    on order.cust_id == customer.customer_id
     within 5 minutes
 
-// Composite asymmetric keys
+// Compound conditions with AND
 join transactions with accounts
-    on txn.account_num = acct.id, txn.currency = acct.base_currency
+    on txn.account_num == acct.id
+       and txn.currency == acct.base_currency
+       and txn.branch_code == acct.branch_code
     within 10 minutes
+
+// Complex conditions with OR, NOT
+join orders with inventory
+    on order.product_id == inv.product_id
+       and (order.warehouse == inv.warehouse or inv.warehouse == "CENTRAL")
+       and not inv.is_reserved
+    within 5 minutes
 ```
 
-Symmetric form still works:
+Symmetric form still works for simple shared-key joins:
 ```
 join orders with customers on customer_id within 5 minutes
 ```
