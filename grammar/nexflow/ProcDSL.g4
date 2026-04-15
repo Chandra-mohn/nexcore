@@ -87,7 +87,8 @@ processName
     : IDENTIFIER
     ;
 
-// Processing block contains declaration types
+// Processing block contains all processing statement types.
+// Used in top-level process body, phase blocks, and if/else blocks.
 processingBlock
     : enrichDecl
     | transformDecl
@@ -106,9 +107,11 @@ processingBlock
     | callStatement
     | scheduleStatement
     | setStatement
+    | letStatement
     | lookupStatement
     | signalStatement
     | sqlStatement
+    | ifStatement
     | filterStatement                                          // GAP-09: standalone filter
     | groupByStatement                                         // GAP-22: batch GROUP BY
     | orderByStatement                                         // GAP-23: batch ORDER BY
@@ -443,6 +446,8 @@ processingStatement
     | setStatement
     | letStatement
     | ifStatement
+    | signalStatement
+    | sqlStatement
     | filterStatement                                          // GAP-09
     | groupByStatement                                         // GAP-22
     | orderByStatement                                         // GAP-23
@@ -638,7 +643,7 @@ windowOptions
 joinDecl
     : JOIN IDENTIFIER WITH IDENTIFIER
         ON joinCondition
-        WITHIN duration
+        (WITHIN duration)?                                     // Optional: required for stream, omitted for batch
         joinType?
         (SELECT fieldList)?                                    // GAP-08: project fields
         schemaDecl?                                            // GAP-18: output schema
@@ -661,11 +666,12 @@ mergeDecl
         (INTO IDENTIFIER)?
     ;
 
-// Enrich
+// Enrich (added INTO for output naming)
 enrichDecl
-    : ENRICH USING IDENTIFIER
+    : ENRICH (IDENTIFIER)? USING IDENTIFIER
         ON fieldList
         selectClause?
+        (INTO IDENTIFIER)?
     ;
 
 selectClause
@@ -694,13 +700,14 @@ logWarningStatement
     : LOG_WARNING STRING
     ;
 
-// Lookup with various sources
+// Lookup with various sources (added INTO for output naming)
 lookupStatement
     : LOOKUP IDENTIFIER
         (KEY fieldPath)?
         (FROM lookupSource)?
         (FILTER expression)?          // Filter for state store scans
         (CACHE TTL duration)?
+        (INTO IDENTIFIER)?
     ;
 
 lookupSource
