@@ -20,6 +20,9 @@ members = [
     "crates/cobol-transpiler",
     "crates/cobol-rustify",
 
+    # Mainframe source grammars
+    "crates/cobol-jcl",
+
     # NexIntel (code + data intelligence)
     "crates/cobol-data",
     "crates/cobol-intel",
@@ -107,6 +110,9 @@ cobol-runtime = { path = "crates/cobol-runtime" }
 cobol-transpiler = { path = "crates/cobol-transpiler" }
 cobol-rustify = { path = "crates/cobol-rustify" }
 cobol-macros = { path = "crates/cobol-macros" }
+
+# Internal crates -- Mainframe grammars
+cobol-jcl = { path = "crates/cobol-jcl" }
 
 # Internal crates -- NexIntel
 cobol-data = { path = "crates/cobol-data" }

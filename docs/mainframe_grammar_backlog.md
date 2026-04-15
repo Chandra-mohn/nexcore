@@ -38,15 +38,46 @@ command reveals architectural intent about the modernized application.
 BMS maps define CICS screen layouts. SEND MAP / RECEIVE MAP commands
 reference these maps. Combined, they define the UI contract.
 
+BMS macros (assembler-level):
+- DFHMSD: Mapset definition (container, MODE=INOUT, LANG=COBOL, CTRL, STORAGE)
+- DFHMDI: Map definition (one screen, SIZE=(24,80), LINE, COLUMN)
+- DFHMDF: Field definition (POS, LENGTH, ATTRB, COLOR, HILIGHT, INITIAL, PICIN/PICOUT)
+
+Field attributes (ATTRB= option on DFHMDF):
+- PROT/UNPROT: Protected (display) vs unprotected (input)
+- ASKIP: Auto-skip (cursor skips past, used for labels)
+- BRT/NORM/DRK: Bright, normal, dark (DRK = hidden, e.g., passwords)
+- NUM: Numeric-only input
+- IC: Initial cursor position
+- FSET: Modified data tag (force field to appear modified)
+
+Pseudo-conversational flow (the standard CICS screen interaction model):
+1. SEND MAP (display screen to user)
+2. RETURN TRANSID (return control to CICS, remember transaction ID)
+3. User types input, presses PF key
+4. CICS re-invokes program with the saved TRANSID
+5. RECEIVE MAP (read user input from screen)
+6. Process input, goto step 1 or XCTL to another program
+
+HANDLE AID maps PF keys to program logic (navigation/actions):
+- HANDLE AID PF3(EXIT-PARA) PF7(PAGE-BACK) PF8(PAGE-FWD) ENTER(PROCESS)
+- EIBAID field contains the actual AID key pressed at runtime
+- PF key -> action mapping drives .screen action declarations
+
 | ID | Task | Scope | Outcome |
 |----|------|-------|---------|
 | C2.1 | Extract SEND MAP commands | Map name, MAPSET, FROM field, CURSOR | Screen output operations |
 | C2.2 | Extract RECEIVE MAP commands | Map name, INTO field | Screen input operations |
-| C2.3 | Parse BMS map definitions | Use grammar/cobol/BmsDSL.g4 | Field positions, lengths, attributes |
+| C2.3 | Parse BMS map definitions | Use grammar/cobol/BmsDSL.g4 + bms_parser | Field positions, lengths, attributes |
 | C2.4 | Build BMS -> ScreenDSL mapper | BMS fields -> .screen field declarations | Screen layout with types |
 | C2.5 | Correlate MAP commands with BMS definitions | SEND MAP "X" -> BMS map X fields | Complete screen model |
 | C2.6 | Emit .screen files | ScreenDSL grammar-valid output | One .screen per BMS mapset |
 | C2.7 | Handle SEND TEXT / SEND CONTROL | Non-map screen output | Text-mode screens |
+| C2.8 | Extract HANDLE AID commands | PF key -> paragraph mapping (PF1-PF24, ENTER, CLEAR, PA1-PA3) | .screen action declarations |
+| C2.9 | Extract EIBAID-based key dispatch | IF EIBAID = DFHPF3 / EVALUATE EIBAID patterns | .screen action declarations (alternative to HANDLE AID) |
+| C2.10 | Detect pseudo-conversational flow | SEND MAP + RETURN TRANSID + RECEIVE MAP sequence per program | Screen navigation model (view -> view transitions) |
+| C2.11 | Map RETURN TRANSID to screen transitions | RETURN TRANSID('xxxx') COMMAREA -> next screen entry point | .screen navigate declarations |
+| C2.12 | Extract XCTL-based screen navigation | XCTL PROGRAM('xxx') -> transfer to another screen program | .screen navigate (cross-program transitions) |
 
 ### Phase C3: API Emission (.api from LINK / XCTL / WEB)
 

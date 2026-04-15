@@ -700,6 +700,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobol-jcl"
+version = "0.2.13"
+dependencies = [
+ "miette",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "cobol-macros"
 version = "0.2.13"
 
