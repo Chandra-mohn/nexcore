@@ -5,14 +5,19 @@ Reference: `~/workspace/nexflow/nexflow-toolchain/docs/PROC-GRAMMAR-GAP-ANALYSIS
 
 ---
 
-## 1. Join -- Asymmetric Keys (GAP-01)
+## 1. Join -- Full Expression Conditions (GAP-01)
 
-**Before:** Both sides must share the same field name.
+**Before:** Both sides must share the same field name. No way to express
+different key names, range conditions, or complex predicates.
 ```
 join orders with customers on customer_id within 5 minutes
 ```
 
-**After:** Full boolean expression support for join conditions.
+**After:** Join conditions use the full expression language -- the same
+operators available everywhere in the DSL: `==`, `!=`, `<`, `>`, `<=`, `>=`,
+`and`, `or`, `not`, `between`, `in`, `is null`, `like`, `matches`,
+parenthesized grouping, and function calls.
+
 ```
 // Simple equality (different field names)
 join orders with customers
@@ -26,12 +31,33 @@ join transactions with accounts
        and txn.branch_code == acct.branch_code
     within 10 minutes
 
-// Complex conditions with OR, NOT
+// Range-based join (inequality conditions)
+join transactions with pricing
+    on txn.product_id == price.product_id
+       and txn.amount >= price.min_threshold
+       and txn.amount < price.max_threshold
+       and txn.effective_date <= price.expiry_date
+    within 10 minutes
+
+// Complex conditions with OR, NOT, parentheses
 join orders with inventory
     on order.product_id == inv.product_id
        and (order.warehouse == inv.warehouse or inv.warehouse == "CENTRAL")
        and not inv.is_reserved
     within 5 minutes
+
+// Using BETWEEN and IN
+join trades with limits
+    on trade.account_id == limit.account_id
+       and trade.amount between limit.min_amount and limit.max_amount
+       and trade.asset_class in ("EQUITY", "BOND", "FX")
+    within 30 seconds
+
+// Null-safe join
+join master with updates
+    on master.id == updates.id
+       and updates.deleted_at is null
+    within 1 hour
 ```
 
 Symmetric form still works for simple shared-key joins:
