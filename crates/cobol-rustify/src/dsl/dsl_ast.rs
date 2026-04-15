@@ -636,8 +636,6 @@ pub enum ProcessStmt {
     Route(RouteBlock),
     /// Parallel fan-out: `parallel ... branch ... end`
     Parallel(ParallelBlock),
-    /// Loop: `loop ... end` (from PERFORM UNTIL)
-    Loop(LoopBlock),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -697,13 +695,6 @@ pub struct RouteBlock {
 #[derive(Debug, Clone, Serialize)]
 pub struct ParallelBlock {
     pub branches: Vec<(Ident, Vec<ProcessStmt>)>,
-}
-
-/// Loop block (from PERFORM UNTIL).
-#[derive(Debug, Clone, Serialize)]
-pub struct LoopBlock {
-    pub condition: Option<String>,
-    pub body: Vec<ProcessStmt>,
 }
 
 // ============================================================================
@@ -1368,16 +1359,6 @@ fn write_process_stmt(out: &mut String, stmt: &ProcessStmt, level: usize) {
                     write_process_stmt(out, s, level + 2);
                 }
                 let _ = writeln!(out, "{}end", indent(level + 1));
-            }
-            let _ = writeln!(out, "{}end", indent(level));
-        }
-        ProcessStmt::Loop(l) => {
-            let _ = writeln!(out, "{}loop", indent(level));
-            if let Some(cond) = &l.condition {
-                let _ = writeln!(out, "{}// until: {cond}", indent(level + 1));
-            }
-            for s in &l.body {
-                write_process_stmt(out, s, level + 1);
             }
             let _ = writeln!(out, "{}end", indent(level));
         }

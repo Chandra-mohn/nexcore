@@ -185,11 +185,10 @@ Last updated: Session E4 (2026-03-20)
 - [DONE] Import per-section transforms from E2
 - [DONE] Import per-section rules from E3
 
-### Execution + Loops
+### Execution
 - [DONE] ExecutionBlock AST (parallelism, partition_by) with serializer
-- [DONE] LoopBlock AST from PERFORM UNTIL (condition extracted via condition_to_string)
-- [DONE] Loop wraps performed paragraph steps when PERFORM UNTIL detected
 - [DONE] mode batch always emitted for COBOL programs
+- PERFORM UNTIL handled by receive in batch mode (no loop construct -- DSL is declarative)
 
 ### Parallel + Routing
 - [DONE] ParallelBlock AST with branch serialization

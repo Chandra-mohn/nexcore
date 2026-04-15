@@ -82,8 +82,6 @@ pub struct CallNode {
     pub writes: Vec<String>,
     /// What role this node plays
     pub role: NodeRole,
-    /// PERFORM UNTIL condition (if this node has a loop pattern)
-    pub loop_condition: Option<String>,
 }
 
 /// Classification of a node's role in the process.
@@ -199,7 +197,6 @@ fn build_call_graph(fns: &[AnnotatedFn]) -> CallGraph {
             reads: attr.reads.clone(),
             writes: attr.writes.clone(),
             role,
-            loop_condition: None,
         });
     }
 
@@ -475,47 +472,28 @@ fn collect_steps(
                 node.cobol_name, reads_str, writes_str,
             )));
 
-            // Check for PERFORM UNTIL loop pattern
-            if let Some(condition) = &node.loop_condition {
-                // Wrap performed steps in a loop block
-                let mut loop_body = Vec::new();
-                loop_body.push(ProcessStmt::TransformUsing {
-                    input: Ident::new("input_records"),
-                    using: Ident::new(&node.nexflow_name),
-                    output: Ident::new("output_records"),
-                });
-                for perf in &node.performs {
-                    let perf_name = sanitize_identifier(&perf.to_lowercase().replace('-', "_"));
-                    collect_steps(&mut loop_body, graph, &perf_name, notes, visited);
+            // Emit as transform + check for parallel fan-out
+            body.push(ProcessStmt::TransformUsing {
+                input: Ident::new("input_records"),
+                using: Ident::new(&node.nexflow_name),
+                output: Ident::new("output_records"),
+            });
+
+            let perf_names: Vec<String> = node.performs.iter()
+                .map(|p| sanitize_identifier(&p.to_lowercase().replace('-', "_")))
+                .collect();
+
+            if perf_names.len() >= 2 && are_sections_independent(graph, &perf_names) {
+                let mut branches = Vec::new();
+                for pn in &perf_names {
+                    let mut branch_body = Vec::new();
+                    collect_steps(&mut branch_body, graph, pn, notes, visited);
+                    branches.push((Ident::new(pn), branch_body));
                 }
-                body.push(ProcessStmt::Loop(LoopBlock {
-                    condition: Some(condition.clone()),
-                    body: loop_body,
-                }));
+                body.push(ProcessStmt::Parallel(ParallelBlock { branches }));
             } else {
-                // No loop -- emit as regular transform + check for parallel
-                body.push(ProcessStmt::TransformUsing {
-                    input: Ident::new("input_records"),
-                    using: Ident::new(&node.nexflow_name),
-                    output: Ident::new("output_records"),
-                });
-
-                let perf_names: Vec<String> = node.performs.iter()
-                    .map(|p| sanitize_identifier(&p.to_lowercase().replace('-', "_")))
-                    .collect();
-
-                if perf_names.len() >= 2 && are_sections_independent(graph, &perf_names) {
-                    let mut branches = Vec::new();
-                    for pn in &perf_names {
-                        let mut branch_body = Vec::new();
-                        collect_steps(&mut branch_body, graph, pn, notes, visited);
-                        branches.push((Ident::new(pn), branch_body));
-                    }
-                    body.push(ProcessStmt::Parallel(ParallelBlock { branches }));
-                } else {
-                    for pn in &perf_names {
-                        collect_steps(body, graph, pn, notes, visited);
-                    }
+                for pn in &perf_names {
+                    collect_steps(body, graph, pn, notes, visited);
                 }
             }
         }

@@ -140,20 +140,10 @@ fn build_node_from_paragraph(para: &Paragraph, section: Option<&str>) -> Option<
     let mut performs = Vec::new();
     let mut reads = HashSet::new();
     let mut writes = HashSet::new();
-    let mut loop_condition = None;
 
     for sentence in &para.sentences {
         for stmt in &sentence.statements {
             analyze_statement(stmt, &mut performs, &mut reads, &mut writes);
-
-            // Detect PERFORM UNTIL pattern
-            if let cobol_transpiler::ast::Statement::Perform(perf) = stmt {
-                if let cobol_transpiler::ast::PerformLoopType::Until { condition, .. } = &perf.loop_type {
-                    loop_condition = Some(
-                        super::condition_extract::condition_to_string(condition),
-                    );
-                }
-            }
         }
     }
 
@@ -179,7 +169,6 @@ fn build_node_from_paragraph(para: &Paragraph, section: Option<&str>) -> Option<
         reads: sorted_vec(reads),
         writes: sorted_vec(writes),
         role,
-        loop_condition,
     })
 }
 
@@ -610,69 +599,8 @@ mod tests {
         assert_eq!(modes.get("OUTFILE"), Some(&IoDirection::Output));
     }
 
-    // -----------------------------------------------------------------------
-    // PERFORM UNTIL loop detection tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn perform_until_emits_loop_block() {
-        let proc_div = ProcedureDivision {
-            using_params: vec![],
-            returning: None,
-            sections: vec![Section {
-                name: "MAIN-SECTION".to_string(),
-                paragraphs: vec![
-                    make_paragraph("MAIN-PARA", vec![
-                        Statement::Perform(PerformStatement {
-                            target: Some(PerformTarget {
-                                name: "PROCESS-RECORD".to_string(),
-                            }),
-                            thru: None,
-                            loop_type: PerformLoopType::Until {
-                                test_before: true,
-                                condition: cobol_transpiler::ast::Condition::ConditionName(
-                                    DataReference {
-                                        name: "WS-EOF-FLAG".to_string(),
-                                        qualifiers: vec![],
-                                        subscripts: vec![],
-                                        ref_mod: None,
-                                    },
-                                ),
-                            },
-                            body: vec![],
-                        }),
-                        make_move("WS-IN", "WS-OUT"),
-                    ]),
-                    make_paragraph("PROCESS-RECORD", vec![
-                        make_move("WS-REC", "WS-OUT"),
-                    ]),
-                ],
-            }],
-            paragraphs: vec![],
-        };
-
-        let program = make_program_with_proc(proc_div);
-        let ctx = DirectEmitterContext {
-            cobol_program: &program,
-            program_name: "TESTPROG".to_string(),
-            hints: None,
-            assessments: &[],
-            target: None,
-            source_path: std::path::PathBuf::from("test.cbl"),
-        };
-
-        let files = DirectProcessEmitter.emit(&ctx);
-        assert!(!files.is_empty());
-        let content = &files[0].content;
-        assert!(
-            content.contains("loop"),
-            "PERFORM UNTIL should emit loop block, got: {content}"
-        );
-        assert!(
-            content.contains("ws_eof_flag"),
-            "Loop should contain condition, got: {content}"
-        );
-    }
+    // PERFORM UNTIL is handled by receive (batch mode processes all records).
+    // No loop construct needed -- the DSL is declarative (map/reduce/filter).
 
     // -----------------------------------------------------------------------
     // Parallel fan-out tests
