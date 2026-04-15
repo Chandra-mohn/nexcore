@@ -109,6 +109,9 @@ processingBlock
     | lookupStatement
     | signalStatement
     | sqlStatement
+    | filterStatement                                          // GAP-09: standalone filter
+    | groupByStatement                                         // GAP-22: batch GROUP BY
+    | orderByStatement                                         // GAP-23: batch ORDER BY
     ;
 
 // ----------------------------------------------------------------------------
@@ -277,6 +280,7 @@ connectorType
     | STATE_STORE
     | PARQUET
     | CSV
+    | JDBC                                                     // GAP-20: JDBC connector
     | IDENTIFIER
     ;
 
@@ -439,6 +443,9 @@ processingStatement
     | setStatement
     | letStatement
     | ifStatement
+    | filterStatement                                          // GAP-09
+    | groupByStatement                                         // GAP-22
+    | orderByStatement                                         // GAP-23
     ;
 
 // Transform with optional inline body or 'using' reference
@@ -576,9 +583,9 @@ otherwiseClause
     : OTHERWISE (TO IDENTIFIER | CONTINUE)
     ;
 
-// Window with inline aggregations
+// Window with inline aggregations (GAP-04: INTO clause)
 windowDecl
-    : WINDOW windowType duration windowBody?
+    : WINDOW windowType duration windowBody? (INTO IDENTIFIER)?
     ;
 
 windowType
@@ -595,7 +602,7 @@ windowBody
     ;
 
 keyByClause
-    : KEY BY fieldPath
+    : KEY BY fieldList                                         // GAP-05: composite keys
     ;
 
 inlineAggregateBlock
@@ -627,12 +634,25 @@ windowOptions
     : latenessDecl? lateDataDecl?
     ;
 
-// Join
+// Join (GAP-01: asymmetric keys, GAP-02: INTO, GAP-08: SELECT, GAP-18: schema)
 joinDecl
     : JOIN IDENTIFIER WITH IDENTIFIER
-        ON fieldList
+        ON joinCondition
         WITHIN duration
         joinType?
+        (SELECT fieldList)?                                    // GAP-08: project fields
+        schemaDecl?                                            // GAP-18: output schema
+        (INTO IDENTIFIER)?                                     // GAP-02: output naming
+    ;
+
+// Join condition: symmetric (shared field names) or asymmetric (left = right pairs)
+joinCondition
+    : fieldList                                                // Symmetric: on customer_id, region
+    | joinKeyPair (COMMA joinKeyPair)*                         // Asymmetric: on cust_id = customer_id
+    ;
+
+joinKeyPair
+    : fieldPath ASSIGN fieldPath                               // left_field = right_field
     ;
 
 joinType
@@ -656,10 +676,11 @@ selectClause
     : SELECT fieldList
     ;
 
-// Aggregate (external reference)
+// Aggregate (external reference) (GAP-06: INTO clause)
 aggregateDecl
     : AGGREGATE (USING IDENTIFIER | IDENTIFIER)
         aggregateOptions?
+        (INTO IDENTIFIER)?                                     // GAP-06: output naming
     ;
 
 aggregateOptions
@@ -703,12 +724,13 @@ branchBody
     : (processingStatement | emitDecl | TERMINATE)+
     ;
 
-// Parallel fan-out
+// Parallel fan-out (GAP-16: result merging INTO)
 parallelStatement
     : PARALLEL IDENTIFIER
         parallelOptions?
         parallelBranch+
       END
+      (INTO IDENTIFIER)?                                       // GAP-16: merged output
     ;
 
 parallelOptions
@@ -740,11 +762,12 @@ actorType
     | USER fieldPath
     ;
 
-// Deduplication
+// Deduplication (GAP-19: INTO clause)
 deduplicateStatement
     : DEDUPLICATE BY fieldPath
         (WINDOW duration)?
         conditionalAction?
+        (INTO IDENTIFIER)?                                     // GAP-19: output naming
     ;
 
 // Input validation
@@ -757,10 +780,11 @@ validationRule
     : REQUIRE expression ELSE STRING
     ;
 
-// External API calls
+// External API calls (GAP-19: INTO clause)
 callStatement
     : CALL callType (IDENTIFIER | STRING)    // call ml_service "model_name" or call external service_id
         callOptions?
+        (INTO IDENTIFIER)?                                     // GAP-19: output naming
     ;
 
 callType
@@ -809,6 +833,7 @@ scheduleDuration
 sqlStatement
     : SQL SQL_BLOCK                   // sql ```...```
         (AS IDENTIFIER)?              // Optional output type: as SalesSummary
+        (INTO IDENTIFIER)?            // GAP-07: output stream naming
     ;
 
 // Set statement for field updates
@@ -832,6 +857,35 @@ ifStatement
 
 ifBody
     : (processingBlock | emitDecl | ifStatement)+
+    ;
+
+// GAP-09: Standalone filter operator (mid-pipeline filtering)
+filterStatement
+    : FILTER (IDENTIFIER)? WHEN expression (INTO IDENTIFIER)?
+    ;
+
+// GAP-22: GROUP BY without window (batch-mode aggregation)
+groupByStatement
+    : GROUP BY fieldList
+        inlineAggregateBlock?
+        (HAVING expression)?
+        (INTO IDENTIFIER)?
+    ;
+
+// GAP-23: ORDER BY / LIMIT for batch mode
+orderByStatement
+    : ORDER BY orderByField (COMMA orderByField)*
+        (LIMIT INTEGER)?
+        (INTO IDENTIFIER)?
+    ;
+
+orderByField
+    : fieldPath orderDirection?
+    ;
+
+orderDirection
+    : ASC
+    | DESC
     ;
 
 // ----------------------------------------------------------------------------
@@ -1185,7 +1239,12 @@ comparisonExpression
     | additiveExpression IN LBRACKET valueList RBRACKET       // x in [a, b, c]
     | additiveExpression NOT IN LPAREN valueList RPAREN       // x not in (a, b, c)
     | additiveExpression NOT IN LBRACKET valueList RBRACKET   // x not in [a, b, c]
+    | additiveExpression BETWEEN additiveExpression AND additiveExpression  // GAP-10: x between 10 and 20
+    | additiveExpression LIKE STRING                           // GAP-11: x like "%pattern%"
+    | additiveExpression MATCHES STRING                        // GAP-11: x matches "^regex$"
     | CONTAINS LPAREN fieldPath COMMA STRING RPAREN
+    | STARTS_WITH LPAREN fieldPath COMMA STRING RPAREN         // GAP-11: starts_with(field, "prefix")
+    | ENDS_WITH LPAREN fieldPath COMMA STRING RPAREN           // GAP-11: ends_with(field, "suffix")
     ;
 
 comparisonOp
@@ -1212,8 +1271,21 @@ primaryExpression
     | arrayLiteral              // Allow inline array construction: [a, b, c]
     | LPAREN expression RPAREN
     | ternaryExpression
+    | caseExpression                                           // GAP-14: case/when/else/end
     | interpolatedString
     | durationLiteral           // Allow duration as primary expression for arithmetic
+    ;
+
+// GAP-14: Multi-branch conditional expression
+caseExpression
+    : CASE expression?
+        caseWhenClause+
+        (ELSE expression)?
+      END
+    ;
+
+caseWhenClause
+    : WHEN expression THEN expression
     ;
 
 ternaryExpression
@@ -1229,6 +1301,13 @@ functionName
     | LOOKUP              // lookup() function
     | NOW                 // now() function
     | COUNT               // count() function
+    | COALESCE            // GAP-15: coalesce(a, b, c)
+    | IFNULL              // GAP-15: ifnull(a, default)
+    | CAST                // GAP-21: cast(field, "type")
+    | TO_INT              // GAP-21: to_int(field)
+    | TO_STRING           // GAP-21: to_string(field)
+    | TO_DECIMAL          // GAP-21: to_decimal(field)
+    | TO_DATE             // GAP-21: to_date(field)
     ;
 
 interpolatedString
@@ -1401,6 +1480,7 @@ MONGODB       : 'mongodb' ;
 REDIS         : 'redis' ;
 SCHEDULER     : 'scheduler' ;
 STATE_STORE   : 'state_store' ;
+JDBC          : 'jdbc' ;                                       // GAP-20
 PARQUET       : 'parquet' ;
 CSV           : 'csv' ;
 GROUP         : 'group' ;
@@ -1563,6 +1643,7 @@ ENDIF         : 'endif' ;
 IN            : 'in' ;
 CONTINUE      : 'continue' ;
 TERMINATE     : 'terminate' ;
+LIMIT         : 'limit' ;                                      // GAP-23
 
 // ----------------------------------------------------------------------------
 // Keywords - Conditional Actions
@@ -1684,6 +1765,22 @@ IS            : 'is' ;
 CONTAINS      : 'contains' ;
 NONE          : 'none' ;
 FILTER        : 'filter' ;
+LIKE          : 'like' ;                                       // GAP-11
+MATCHES       : 'matches' ;                                    // GAP-11
+STARTS_WITH   : 'starts_with' ;                                // GAP-11
+ENDS_WITH     : 'ends_with' ;                                  // GAP-11
+CASE          : 'case' ;                                       // GAP-14
+COALESCE      : 'coalesce' ;                                   // GAP-15
+IFNULL        : 'ifnull' ;                                     // GAP-15
+CAST          : 'cast' ;                                       // GAP-21
+TO_INT        : 'to_int' ;                                     // GAP-21
+TO_STRING     : 'to_string' ;                                  // GAP-21
+TO_DECIMAL    : 'to_decimal' ;                                 // GAP-21
+TO_DATE       : 'to_date' ;                                    // GAP-21
+ORDER         : 'order' ;                                      // GAP-23
+ASC           : 'asc' ;                                        // GAP-23
+DESC          : 'desc' ;                                       // GAP-23
+HAVING        : 'having' ;                                     // GAP-22
 
 // ----------------------------------------------------------------------------
 // Time Units

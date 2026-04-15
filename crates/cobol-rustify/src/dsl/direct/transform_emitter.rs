@@ -5,17 +5,18 @@
 //! statements. Unlike the legacy emitter, this produces actual mappings
 //! instead of placeholders.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use cobol_transpiler::ast::{Paragraph, ProcedureDivision};
+use cobol_transpiler::ast::{CobolProgram, Paragraph, ProcedureDivision};
 
-use super::cobol_extract::analyze_statement;
-use super::condition_extract::{extract_mappings, ExtractedMapping};
+use super::cobol_extract::{analyze_statement, extract_on_size_error, has_side_effects, usage_to_str, walk_elementary_entries};
+use super::condition_extract::{evaluate_to_conditional_compose, extract_mappings, ExtractedMapping};
 use super::{DirectDslEmitter, DirectEmitterContext};
 use crate::dsl::dsl_ast::*;
 use crate::dsl::transform_emitter::{
     group_by_section, sanitize_identifier, ClassifiedTransform, TransformKind,
 };
+use crate::dsl::type_mapping::pic_to_nexflow_type;
 use crate::dsl::{DslFile, DslLayer};
 
 /// Direct transform emitter: reads COBOL AST ProcedureDivision.
@@ -37,6 +38,8 @@ impl DirectDslEmitter for DirectTransformEmitter {
             None => return vec![],
         };
 
+        let field_type_map = build_field_type_map(ctx.cobol_program);
+
         let enriched = classify_and_extract(proc_div);
         if enriched.is_empty() {
             return vec![];
@@ -46,16 +49,28 @@ impl DirectDslEmitter for DirectTransformEmitter {
         let transforms: Vec<ClassifiedTransform> = enriched.iter().map(|e| e.classified.clone()).collect();
         let sections = group_by_section(&transforms);
 
-        // Build a lookup from nexflow_name -> extracted mappings
-        let mapping_lookup: std::collections::HashMap<&str, &[ExtractedMapping]> = enriched
+        // Build lookups from nexflow_name -> extracted mappings and purity
+        let mapping_lookup: HashMap<&str, &[ExtractedMapping]> = enriched
             .iter()
             .map(|e| (e.classified.nexflow_name.as_str(), e.mappings.as_slice()))
+            .collect();
+        let purity_lookup: HashMap<&str, bool> = enriched
+            .iter()
+            .map(|e| (e.classified.nexflow_name.as_str(), e.pure))
+            .collect();
+        let error_lookup: HashMap<&str, &Option<Vec<ErrorStatement>>> = enriched
+            .iter()
+            .map(|e| (e.classified.nexflow_name.as_str(), &e.on_error))
+            .collect();
+        let compose_lookup: HashMap<&str, &Option<ComposeBlock>> = enriched
+            .iter()
+            .map(|e| (e.classified.nexflow_name.as_str(), &e.conditional_compose))
             .collect();
 
         let mut dsl_files = Vec::new();
         for (section_name, section_transforms) in &sections {
             let (content, notes, confidence) =
-                generate_transform_file_direct(section_name, section_transforms, &ctx.program_name, &mapping_lookup);
+                generate_transform_file_direct(section_name, section_transforms, &ctx.program_name, &mapping_lookup, &purity_lookup, &field_type_map, &error_lookup, &compose_lookup);
             let source_fns: Vec<String> = section_transforms
                 .iter()
                 .map(|t| t.cobol_name.clone())
@@ -78,6 +93,12 @@ impl DirectDslEmitter for DirectTransformEmitter {
 struct EnrichedTransform {
     classified: ClassifiedTransform,
     mappings: Vec<ExtractedMapping>,
+    /// Whether the paragraph contains only pure computation (no I/O or external calls).
+    pure: bool,
+    /// Error handling extracted from ON SIZE ERROR in arithmetic statements.
+    on_error: Option<Vec<ErrorStatement>>,
+    /// Conditional compose block from EVALUATE...PERFORM pattern.
+    conditional_compose: Option<ComposeBlock>,
 }
 
 /// Classify all paragraphs and extract expressions from their statements.
@@ -151,6 +172,17 @@ fn classify_and_extract_paragraph(
         .collect();
     let stmts_owned: Vec<cobol_transpiler::ast::Statement> = all_stmts.into_iter().cloned().collect();
     let mappings = extract_mappings(&stmts_owned);
+    let pure = !has_side_effects(&stmts_owned);
+    let on_error = extract_on_size_error(&stmts_owned);
+
+    // Detect EVALUATE...PERFORM pattern for conditional compose
+    let conditional_compose = stmts_owned.iter().find_map(|stmt| {
+        if let cobol_transpiler::ast::Statement::Evaluate(eval) = stmt {
+            evaluate_to_conditional_compose(eval)
+        } else {
+            None
+        }
+    });
 
     Some(EnrichedTransform {
         classified: ClassifiedTransform {
@@ -163,6 +195,9 @@ fn classify_and_extract_paragraph(
             performs,
         },
         mappings,
+        pure,
+        on_error,
+        conditional_compose,
     })
 }
 
@@ -174,22 +209,35 @@ fn generate_transform_file_direct(
     section_name: &str,
     transforms: &[&ClassifiedTransform],
     program: &str,
-    mapping_lookup: &std::collections::HashMap<&str, &[ExtractedMapping]>,
+    mapping_lookup: &HashMap<&str, &[ExtractedMapping]>,
+    purity_lookup: &HashMap<&str, bool>,
+    field_map: &HashMap<String, FieldType>,
+    error_lookup: &HashMap<&str, &Option<Vec<ErrorStatement>>>,
+    compose_lookup: &HashMap<&str, &Option<ComposeBlock>>,
 ) -> (String, Vec<String>, f64) {
     let mut items = Vec::new();
     let mut notes = Vec::new();
 
     for t in transforms {
         let extracted = mapping_lookup.get(t.nexflow_name.as_str()).copied().unwrap_or(&[]);
+        let pure = purity_lookup.get(t.nexflow_name.as_str()).copied().unwrap_or(true);
+        let on_error = error_lookup
+            .get(t.nexflow_name.as_str())
+            .and_then(|opt| opt.as_ref())
+            .cloned();
+        let cond_compose = compose_lookup
+            .get(t.nexflow_name.as_str())
+            .and_then(|opt| opt.as_ref())
+            .cloned();
         match t.kind {
             TransformKind::SingleField => {
-                items.push(build_single_transform(t, extracted, &mut notes));
+                items.push(build_single_transform(t, extracted, pure, field_map, on_error, &mut notes));
             }
             TransformKind::MultiField => {
-                items.push(build_multi_transform(t, extracted, &mut notes));
+                items.push(build_multi_transform(t, extracted, field_map, on_error, &mut notes));
             }
             TransformKind::Compose | TransformKind::SectionDispatcher => {
-                items.push(build_compose_transform(t));
+                items.push(build_compose_transform(t, field_map, cond_compose));
             }
         }
     }
@@ -209,13 +257,16 @@ fn generate_transform_file_direct(
 fn build_single_transform(
     t: &ClassifiedTransform,
     extracted: &[ExtractedMapping],
+    pure: bool,
+    field_map: &HashMap<String, FieldType>,
+    on_error: Option<Vec<ErrorStatement>>,
     notes: &mut Vec<String>,
 ) -> TransformItem {
-    let input = build_io_spec(&t.reads);
+    let input = build_io_spec(&t.reads, field_map);
     let output = if t.writes.len() == 1 {
         IoSpec::Single(
             Ident::new(&cobol_to_snake(&t.writes[0])),
-            cobol_name_to_type_hint(&t.writes[0]),
+            resolve_field_type(&t.writes[0], field_map),
         )
     } else {
         IoSpec::Single(Ident::new("result"), FieldType::Integer(None))
@@ -243,16 +294,23 @@ fn build_single_transform(
     TransformItem::Transform(TransformDef {
         name: Ident::new(&t.nexflow_name),
         comment: Some(format!("COBOL paragraph: {}", t.cobol_name)),
-        pure: true,
+        metadata: None,
+        pure,
+        cache: None,
         input,
         output,
         apply,
+        validate_input: generate_input_validations(&t.reads, field_map),
+        validate_output: None,
+        on_error,
     })
 }
 
 fn build_multi_transform(
     t: &ClassifiedTransform,
     extracted: &[ExtractedMapping],
+    field_map: &HashMap<String, FieldType>,
+    on_error: Option<Vec<ErrorStatement>>,
     notes: &mut Vec<String>,
 ) -> TransformItem {
     let (input, output) = if t.reads.is_empty() && t.writes.is_empty() {
@@ -261,7 +319,7 @@ fn build_multi_transform(
             IoSpec::Single(Ident::new("output"), FieldType::Integer(None)),
         )
     } else {
-        (build_io_spec(&t.reads), build_io_spec(&t.writes))
+        (build_io_spec(&t.reads, field_map), build_io_spec(&t.writes, field_map))
     };
 
     let mappings: Vec<MappingEntry> = if extracted.is_empty() {
@@ -314,29 +372,34 @@ fn build_multi_transform(
     TransformItem::TransformBlock(TransformBlockDef {
         name: Ident::new(&t.nexflow_name),
         comment: Some(format!("COBOL paragraph: {}", t.cobol_name)),
+        metadata: None,
+        use_decls: None,
         input,
         output,
         body: TransformBlockBody::Mappings(mappings),
+        validate_input: generate_input_validations(&t.reads, field_map),
+        validate_output: None,
+        on_error,
     })
 }
 
-fn build_compose_transform(t: &ClassifiedTransform) -> TransformItem {
+fn build_compose_transform(t: &ClassifiedTransform, field_map: &HashMap<String, FieldType>, cond_compose: Option<ComposeBlock>) -> TransformItem {
     let input = if !t.reads.is_empty() {
-        build_io_spec(&t.reads)
+        build_io_spec(&t.reads, field_map)
     } else {
         IoSpec::Single(Ident::new("input"), FieldType::Integer(None))
     };
 
     let output = if !t.writes.is_empty() {
-        build_io_spec(&t.writes)
+        build_io_spec(&t.writes, field_map)
     } else {
         IoSpec::Single(Ident::new("output"), FieldType::Integer(None))
     };
 
-    let refs: Vec<Ident> = t
+    let refs: Vec<ComposeRef> = t
         .performs
         .iter()
-        .map(|p| Ident::new(&cobol_to_snake(p)))
+        .map(|p| ComposeRef::Simple(Ident::new(&cobol_to_snake(p))))
         .collect();
 
     let kind_label = if matches!(t.kind, TransformKind::SectionDispatcher) {
@@ -345,15 +408,23 @@ fn build_compose_transform(t: &ClassifiedTransform) -> TransformItem {
         "paragraph"
     };
 
+    // Use conditional compose if EVALUATE...PERFORM pattern detected, otherwise sequential
+    let compose = cond_compose.unwrap_or(ComposeBlock {
+        compose_type: ComposeType::Sequential,
+        refs,
+    });
+
     TransformItem::TransformBlock(TransformBlockDef {
         name: Ident::new(&t.nexflow_name),
         comment: Some(format!("COBOL {}: {}", kind_label, t.cobol_name)),
+        metadata: None,
+        use_decls: None,
         input,
         output,
-        body: TransformBlockBody::Compose(ComposeBlock {
-            compose_type: ComposeType::Sequential,
-            refs,
-        }),
+        body: TransformBlockBody::Compose(compose),
+        validate_input: None,
+        validate_output: None,
+        on_error: None,
     })
 }
 
@@ -361,13 +432,147 @@ fn build_compose_transform(t: &ClassifiedTransform) -> TransformItem {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn build_io_spec(fields: &[String]) -> IoSpec {
+/// Build a map from uppercase COBOL field name to resolved FieldType.
+/// Walks WORKING-STORAGE, LOCAL-STORAGE, and LINKAGE sections.
+fn build_field_type_map(program: &CobolProgram) -> HashMap<String, FieldType> {
+    let mut map = HashMap::new();
+
+    let data_div = match &program.data_division {
+        Some(dd) => dd,
+        None => return map,
+    };
+
+    let all_sections = [
+        data_div.working_storage.as_slice(),
+        data_div.local_storage.as_slice(),
+        data_div.linkage.as_slice(),
+    ];
+
+    for section in all_sections {
+        let entries = walk_elementary_entries(section);
+        for entry in entries {
+            if let Some(pic) = &entry.pic {
+                let snake_name = cobol_to_snake(&entry.name);
+                let nexflow_type = pic_to_nexflow_type(
+                    &pic.raw,
+                    usage_to_str(&entry.usage),
+                    pic.signed,
+                    &snake_name,
+                );
+                map.insert(entry.name.to_uppercase(), nexflow_type.to_field_type());
+            }
+        }
+    }
+
+    map
+}
+
+/// Look up field type from PIC map, falling back to name heuristic.
+fn resolve_field_type(cobol_name: &str, field_map: &HashMap<String, FieldType>) -> FieldType {
+    field_map
+        .get(&cobol_name.to_uppercase())
+        .cloned()
+        .unwrap_or_else(|| cobol_name_to_type_hint(cobol_name))
+}
+
+/// Generate validate_input rules from PIC-based field types.
+///
+/// - Unsigned numeric fields (Integer, Decimal without sign) get a >= 0 constraint
+/// - String/Char fields get a length constraint from PIC
+fn generate_input_validations(
+    reads: &[String],
+    field_map: &HashMap<String, FieldType>,
+) -> Option<Vec<ValidationRule>> {
+    let mut rules = Vec::new();
+
+    for field_name in reads {
+        let ft = match field_map.get(&field_name.to_uppercase()) {
+            Some(ft) => ft,
+            None => continue,
+        };
+        let snake = cobol_to_snake(field_name);
+
+        match ft {
+            // Unsigned integer: require >= 0
+            FieldType::Integer(_) => {
+                rules.push(ValidationRule::Require(
+                    Expr::Binary(
+                        Box::new(Expr::Field(Ident::new(&snake))),
+                        BinOp::Ge,
+                        Box::new(Expr::Lit(Literal::Int(0))),
+                    ),
+                    ValidationMessage {
+                        text: format!("{snake} must be non-negative"),
+                        code: None,
+                        severity: None,
+                    },
+                ));
+            }
+            // Unsigned decimal: require >= 0
+            FieldType::Decimal(_, _) => {
+                rules.push(ValidationRule::Require(
+                    Expr::Binary(
+                        Box::new(Expr::Field(Ident::new(&snake))),
+                        BinOp::Ge,
+                        Box::new(Expr::Lit(Literal::Int(0))),
+                    ),
+                    ValidationMessage {
+                        text: format!("{snake} must be non-negative"),
+                        code: None,
+                        severity: None,
+                    },
+                ));
+            }
+            // String with known length: require length constraint
+            FieldType::String(Some(n)) => {
+                rules.push(ValidationRule::Require(
+                    Expr::Binary(
+                        Box::new(Expr::Call(
+                            Ident::new("length"),
+                            vec![Expr::Field(Ident::new(&snake))],
+                        )),
+                        BinOp::Le,
+                        Box::new(Expr::Lit(Literal::Int(*n as i64))),
+                    ),
+                    ValidationMessage {
+                        text: format!("{snake} exceeds max length {n}"),
+                        code: None,
+                        severity: Some(Severity::Warning),
+                    },
+                ));
+            }
+            // Char with known length
+            FieldType::Char(n) => {
+                rules.push(ValidationRule::Require(
+                    Expr::Binary(
+                        Box::new(Expr::Call(
+                            Ident::new("length"),
+                            vec![Expr::Field(Ident::new(&snake))],
+                        )),
+                        BinOp::Le,
+                        Box::new(Expr::Lit(Literal::Int(*n as i64))),
+                    ),
+                    ValidationMessage {
+                        text: format!("{snake} exceeds max length {n}"),
+                        code: None,
+                        severity: Some(Severity::Warning),
+                    },
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    if rules.is_empty() { None } else { Some(rules) }
+}
+
+fn build_io_spec(fields: &[String], field_map: &HashMap<String, FieldType>) -> IoSpec {
     if fields.is_empty() {
         IoSpec::Single(Ident::new("value"), FieldType::Integer(None))
     } else if fields.len() == 1 {
         IoSpec::Single(
             Ident::new(&cobol_to_snake(&fields[0])),
-            cobol_name_to_type_hint(&fields[0]),
+            resolve_field_type(&fields[0], field_map),
         )
     } else {
         IoSpec::Multi(
@@ -375,7 +580,7 @@ fn build_io_spec(fields: &[String]) -> IoSpec {
                 .iter()
                 .map(|f| IoField {
                     name: Ident::new(&cobol_to_snake(f)),
-                    field_type: cobol_name_to_type_hint(f),
+                    field_type: resolve_field_type(f, field_map),
                 })
                 .collect(),
         )
@@ -677,5 +882,587 @@ mod tests {
 
         let files = DirectTransformEmitter.emit(&ctx);
         assert_eq!(files.len(), 2, "Two sections -> two xform files");
+    }
+
+    #[test]
+    fn pure_paragraph_emits_pure_true() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "CALC-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("CALC-PARA", vec![
+                    make_compute("WS-RESULT", ArithExpr::BinaryOp {
+                        left: Box::new(make_field_ref("WS-A")),
+                        op: ArithOp::Add,
+                        right: Box::new(make_field_ref("WS-B")),
+                    }),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = make_program_with_proc(proc_div);
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("pure : true"),
+            "Pure paragraph should emit pure : true, got: {content}"
+        );
+    }
+
+    #[test]
+    fn impure_paragraph_emits_pure_false() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "IO-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("IO-PARA", vec![
+                    Statement::Display(DisplayStatement {
+                        items: vec![],
+                        upon: DisplayTarget::Sysout,
+                        no_advancing: false,
+                    }),
+                    make_move("WS-INPUT", "WS-OUTPUT"),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = make_program_with_proc(proc_div);
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("pure : false"),
+            "Impure paragraph should emit pure : false, got: {content}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PIC-based type resolution tests
+    // -----------------------------------------------------------------------
+
+    fn make_data_entry(name: &str, pic_raw: &str, signed: bool) -> DataEntry {
+        DataEntry {
+            level: 5,
+            name: name.to_string(),
+            pic: Some(PicClause {
+                raw: pic_raw.to_string(),
+                category: if pic_raw.starts_with('X') || pic_raw.starts_with('A') {
+                    PicCategory::Alphanumeric
+                } else {
+                    PicCategory::Numeric
+                },
+                total_digits: 0,
+                scale: 0,
+                signed,
+                display_length: 0,
+                edit_symbols: vec![],
+            }),
+            usage: Usage::Display,
+            value: None,
+            redefines: None,
+            occurs: None,
+            occurs_depending: None,
+            sign: None,
+            justified_right: false,
+            blank_when_zero: false,
+            children: vec![],
+            condition_values: vec![],
+            byte_offset: None,
+            byte_length: None,
+            renames_target: None,
+            renames_thru: None,
+            index_names: vec![],
+        }
+    }
+
+    #[test]
+    fn build_field_type_map_basic() {
+        let program = CobolProgram {
+            program_id: "TEST".to_string(),
+            data_division: Some(DataDivision {
+                working_storage: vec![
+                    make_data_entry("WS-NAME", "X(30)", false),
+                    make_data_entry("WS-AMOUNT", "S9(9)V99", true),
+                ],
+                local_storage: vec![],
+                linkage: vec![],
+                file_section: vec![],
+            }),
+            procedure_division: None,
+            source_path: None,
+            exec_sql_statements: vec![],
+        };
+
+        let map = build_field_type_map(&program);
+        assert_eq!(
+            map.get("WS-NAME"),
+            Some(&FieldType::String(Some(30))),
+            "PIC X(30) should map to String(30)"
+        );
+        // S9(9)V99 -> decimal(11, 2) via pic_to_nexflow_type
+        assert!(
+            matches!(map.get("WS-AMOUNT"), Some(FieldType::Decimal(_, _))),
+            "PIC S9(9)V99 should map to Decimal, got: {:?}",
+            map.get("WS-AMOUNT")
+        );
+    }
+
+    #[test]
+    fn pic_type_overrides_heuristic() {
+        // "WS-RESULT" would be Decimal(18,2) by name heuristic, but
+        // PIC X(10) should resolve to String(Some(10))
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "CALC-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("CALC-PARA", vec![
+                    make_move("WS-INPUT", "WS-RESULT"),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = CobolProgram {
+            program_id: "TESTPROG".to_string(),
+            data_division: Some(DataDivision {
+                working_storage: vec![
+                    make_data_entry("WS-RESULT", "X(10)", false),
+                    make_data_entry("WS-INPUT", "9(5)", false),
+                ],
+                local_storage: vec![],
+                linkage: vec![],
+                file_section: vec![],
+            }),
+            procedure_division: Some(proc_div),
+            source_path: None,
+            exec_sql_statements: vec![],
+        };
+
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("string(10)"),
+            "Should use PIC-resolved type string(10), got: {content}"
+        );
+    }
+
+    #[test]
+    fn pic_fallback_to_heuristic_when_no_data_division() {
+        // When there's no DataDivision, should fall back to name heuristics
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "INIT-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("INIT-PARA", vec![
+                    make_move("WS-INPUT", "WS-COUNT"),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = CobolProgram {
+            program_id: "TESTPROG".to_string(),
+            data_division: None,
+            procedure_division: Some(proc_div),
+            source_path: None,
+            exec_sql_statements: vec![],
+        };
+
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        // "WS-COUNT" should heuristically map to integer
+        assert!(
+            content.contains("integer"),
+            "Should fall back to heuristic type, got: {content}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // on_error extraction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn on_size_error_emits_on_error_block() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "CALC-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("CALC-PARA", vec![
+                    Statement::Compute(ComputeStatement {
+                        targets: vec![ArithTarget {
+                            field: DataReference {
+                                name: "WS-RESULT".to_string(),
+                                qualifiers: vec![],
+                                subscripts: vec![],
+                                ref_mod: None,
+                            },
+                            rounded: false,
+                        }],
+                        expression: ArithExpr::BinaryOp {
+                            left: Box::new(make_field_ref("WS-A")),
+                            op: ArithOp::Add,
+                            right: Box::new(make_field_ref("WS-B")),
+                        },
+                        on_size_error: vec![Statement::Display(DisplayStatement {
+                            items: vec![],
+                            upon: DisplayTarget::Sysout,
+                            no_advancing: false,
+                        })],
+                        not_on_size_error: vec![],
+                    }),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = make_program_with_proc(proc_div);
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("on_error"),
+            "Should contain on_error block, got: {content}"
+        );
+        assert!(
+            content.contains("action : raise"),
+            "Should contain action : raise, got: {content}"
+        );
+        assert!(
+            content.contains("SIZE_ERROR"),
+            "Should contain error code, got: {content}"
+        );
+    }
+
+    #[test]
+    fn no_size_error_no_on_error_block() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "CALC-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("CALC-PARA", vec![
+                    make_compute("WS-RESULT", ArithExpr::BinaryOp {
+                        left: Box::new(make_field_ref("WS-A")),
+                        op: ArithOp::Add,
+                        right: Box::new(make_field_ref("WS-B")),
+                    }),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = make_program_with_proc(proc_div);
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            !content.contains("on_error"),
+            "Should NOT contain on_error block, got: {content}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_input generation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn numeric_pic_generates_validate_input() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "CALC-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("CALC-PARA", vec![
+                    make_move("WS-AMOUNT", "WS-RESULT"),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = CobolProgram {
+            program_id: "TESTPROG".to_string(),
+            data_division: Some(DataDivision {
+                working_storage: vec![
+                    make_data_entry("WS-AMOUNT", "9(7)V99", false),
+                    make_data_entry("WS-RESULT", "9(9)V99", false),
+                ],
+                local_storage: vec![],
+                linkage: vec![],
+                file_section: vec![],
+            }),
+            procedure_division: Some(proc_div),
+            source_path: None,
+            exec_sql_statements: vec![],
+        };
+
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("validate_input"),
+            "Numeric PIC should generate validate_input, got: {content}"
+        );
+        assert!(
+            content.contains("non-negative"),
+            "Should have non-negative constraint, got: {content}"
+        );
+    }
+
+    #[test]
+    fn string_pic_generates_length_validation() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "INIT-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("INIT-PARA", vec![
+                    make_move("WS-NAME", "WS-OUTPUT"),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = CobolProgram {
+            program_id: "TESTPROG".to_string(),
+            data_division: Some(DataDivision {
+                working_storage: vec![
+                    make_data_entry("WS-NAME", "X(30)", false),
+                    make_data_entry("WS-OUTPUT", "X(50)", false),
+                ],
+                local_storage: vec![],
+                linkage: vec![],
+                file_section: vec![],
+            }),
+            procedure_division: Some(proc_div),
+            source_path: None,
+            exec_sql_statements: vec![],
+        };
+
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("validate_input"),
+            "String PIC should generate validate_input, got: {content}"
+        );
+        assert!(
+            content.contains("max length"),
+            "Should have length constraint, got: {content}"
+        );
+    }
+
+    #[test]
+    fn no_data_division_no_validate_input() {
+        // Without DataDivision, field types are heuristic -- skip validation
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "CALC-SECTION".to_string(),
+                paragraphs: vec![make_paragraph("CALC-PARA", vec![
+                    make_move("WS-UNKNOWN", "WS-OUTPUT"),
+                ])],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = CobolProgram {
+            program_id: "TESTPROG".to_string(),
+            data_division: None,
+            procedure_division: Some(proc_div),
+            source_path: None,
+            exec_sql_statements: vec![],
+        };
+
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            !content.contains("validate_input"),
+            "No DataDivision should skip validate_input, got: {content}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Conditional compose tests
+    // -----------------------------------------------------------------------
+
+    fn make_evaluate_perform(status_field: &str, when_values: &[(&str, &str)], otherwise: Option<&str>) -> Statement {
+        let mut branches = Vec::new();
+        for (val, target) in when_values {
+            branches.push(WhenBranch {
+                values: vec![WhenValue::Value(Operand::Literal(
+                    cobol_transpiler::ast::Literal::Alphanumeric(val.to_string()),
+                ))],
+                body: vec![make_perform(target)],
+            });
+        }
+
+        let when_other = if let Some(target) = otherwise {
+            vec![make_perform(target)]
+        } else {
+            vec![]
+        };
+
+        Statement::Evaluate(EvaluateStatement {
+            subjects: vec![EvaluateSubject::Expr(Operand::DataRef(DataReference {
+                name: status_field.to_string(),
+                qualifiers: vec![],
+                subscripts: vec![],
+                ref_mod: None,
+            }))],
+            when_branches: branches,
+            when_other,
+        })
+    }
+
+    #[test]
+    fn evaluate_perform_emits_conditional_compose() {
+        let proc_div = ProcedureDivision {
+            using_params: vec![],
+            returning: None,
+            sections: vec![Section {
+                name: "DISPATCH-SECTION".to_string(),
+                paragraphs: vec![
+                    make_paragraph("DISPATCH-PARA", vec![
+                        make_evaluate_perform("WS-STATUS", &[
+                            ("A", "PROCESS-ACTIVE"),
+                            ("C", "PROCESS-CLOSED"),
+                        ], Some("PROCESS-DEFAULT")),
+                    ]),
+                    make_paragraph("PROCESS-ACTIVE", vec![
+                        make_move("WS-IN", "WS-OUT"),
+                    ]),
+                    make_paragraph("PROCESS-CLOSED", vec![
+                        make_move("WS-X", "WS-Y"),
+                    ]),
+                    make_paragraph("PROCESS-DEFAULT", vec![
+                        make_move("WS-A", "WS-B"),
+                    ]),
+                ],
+            }],
+            paragraphs: vec![],
+        };
+
+        let program = make_program_with_proc(proc_div);
+        let ctx = DirectEmitterContext {
+            cobol_program: &program,
+            program_name: "TESTPROG".to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.cbl"),
+        };
+
+        let files = DirectTransformEmitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        assert!(
+            content.contains("compose conditional"),
+            "EVALUATE...PERFORM should produce conditional compose, got: {content}"
+        );
+        assert!(
+            content.contains("when "),
+            "Should have when branches, got: {content}"
+        );
+        assert!(
+            content.contains("process_active"),
+            "Should reference process_active, got: {content}"
+        );
+        assert!(
+            content.contains("otherwise"),
+            "Should have otherwise clause, got: {content}"
+        );
     }
 }

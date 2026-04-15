@@ -46,10 +46,22 @@ pub struct AnnotatedField {
 }
 
 /// A function with its name and COBOL attribute.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AnnotatedFn {
     pub name: String,
     pub cobol_attr: Option<FnCobolAttr>,
+    /// Function body (for expression extraction in the legacy path).
+    pub body: Option<syn::Block>,
+}
+
+impl std::fmt::Debug for AnnotatedFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnnotatedFn")
+            .field("name", &self.name)
+            .field("cobol_attr", &self.cobol_attr)
+            .field("body", &self.body.as_ref().map(|_| "..."))
+            .finish()
+    }
 }
 
 /// Extract the program name from `#[cobol(program = "...")]` on the WorkingStorage struct.
@@ -180,6 +192,7 @@ pub fn extract_annotated_fns(file: &syn::File) -> Vec<AnnotatedFn> {
             fns.push(AnnotatedFn {
                 name,
                 cobol_attr: attr,
+                body: Some((*f.block).clone()),
             });
         }
     }

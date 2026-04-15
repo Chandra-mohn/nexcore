@@ -261,10 +261,12 @@ fn analyze_expr(expr: &syn::Expr) -> Option<RuleShape> {
                 } else {
                     scrutinee
                 };
+                // Extract real conditions and actions from match arms
+                let branches = extract_match_branches(&m.arms);
                 Some(RuleShape::DecisionTable {
                     arm_count,
                     scrutinee,
-                    branches: vec![],
+                    branches,
                 })
             } else {
                 None
@@ -334,6 +336,73 @@ fn analyze_if_body(if_expr: &syn::ExprIf) -> Option<RuleShape> {
         return analyze_expr(else_expr);
     }
     None
+}
+
+/// Extract condition/action pairs from match arms.
+///
+/// For each arm, extracts:
+/// - Pattern as a condition string (literal, wildcard, or complex pattern)
+/// - Body actions via extract_action_from_expr
+fn extract_match_branches(
+    arms: &[syn::Arm],
+) -> Vec<(String, Vec<(String, String)>)> {
+    let mut branches = Vec::new();
+
+    for arm in arms {
+        // Extract condition from the pattern
+        let condition = extract_match_pattern(&arm.pat);
+
+        // Extract actions from the body
+        let actions = match arm.body.as_ref() {
+            syn::Expr::Block(b) => super::expr_extract::extract_actions_from_block(&b.block),
+            expr => super::expr_extract::extract_action_from_expr(expr)
+                .into_iter()
+                .collect(),
+        };
+
+        branches.push((condition, actions));
+    }
+
+    branches
+}
+
+/// Extract a readable condition string from a match arm pattern.
+fn extract_match_pattern(pat: &syn::Pat) -> String {
+    match pat {
+        syn::Pat::Lit(lit) => {
+            match &lit.lit {
+                syn::Lit::Str(s) => format!("\"{}\"", s.value()),
+                syn::Lit::Int(i) => i.base10_digits().to_string(),
+                syn::Lit::ByteStr(b) => {
+                    let bytes = b.value();
+                    let text = String::from_utf8_lossy(&bytes);
+                    format!("\"{text}\"")
+                }
+                _ => quote::quote!(#pat).to_string(),
+            }
+        }
+        syn::Pat::Wild(_) => "*".to_string(),
+        syn::Pat::Or(or) => {
+            or.cases
+                .iter()
+                .map(extract_match_pattern)
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+        syn::Pat::Range(r) => {
+            let lo = r.start.as_ref()
+                .map(|e| quote::quote!(#e).to_string())
+                .unwrap_or_default();
+            let hi = r.end.as_ref()
+                .map(|e| quote::quote!(#e).to_string())
+                .unwrap_or_default();
+            format!("{lo} to {hi}")
+        }
+        _ => {
+            let s = quote::quote!(#pat).to_string();
+            if s.len() > 50 { format!("{}...", &s[..47]) } else { s }
+        }
+    }
 }
 
 /// Check if an if/else chain is "tabular" -- each branch is a simple comparison
@@ -560,6 +629,8 @@ fn build_match_decision_table(
             name: Ident::new(&r.nexflow_name),
             comment: Some(format!("COBOL paragraph: {} (EVALUATE {}, {} arms)", r.cobol_name, scrutinee, arm_count)),
             hit_policy: HitPolicy::FirstMatch,
+            description: None,
+            version: None,
             given: build_given_params(r),
             decide: DecideMatrix {
                 condition_col: scrutinee.to_string(),
@@ -567,6 +638,7 @@ fn build_match_decision_table(
                 rows,
             },
             return_params: build_return_params(r),
+            post_calculate: None,
         };
 
         let note = format!("{}: EVALUATE decision table with {} extracted rows", r.cobol_name, branches.len());
@@ -590,6 +662,8 @@ fn build_match_decision_table(
         name: Ident::new(&r.nexflow_name),
         comment: Some(format!("COBOL paragraph: {} (EVALUATE, {} arms, scrutinee: {})", r.cobol_name, arm_count, scrutinee)),
         hit_policy: HitPolicy::FirstMatch,
+        description: None,
+        version: None,
         given: build_given_params(r),
         decide: DecideMatrix {
             condition_col: "condition".to_string(),
@@ -597,6 +671,7 @@ fn build_match_decision_table(
             rows,
         },
         return_params: build_return_params(r),
+        post_calculate: None,
     };
 
     let note = format!("{}: EVALUATE decision table with {} placeholder rows (extraction failed)", r.cobol_name, row_count);
@@ -642,6 +717,8 @@ fn build_tabular_decision_table(
         name: Ident::new(&r.nexflow_name),
         comment: Some(format!("COBOL paragraph: {} (tabular IF/ELSE -> decision_table)", r.cobol_name)),
         hit_policy: HitPolicy::FirstMatch,
+        description: None,
+        version: None,
         given: build_given_params(r),
         decide: DecideMatrix {
             condition_col: "condition".to_string(),
@@ -649,6 +726,7 @@ fn build_tabular_decision_table(
             rows,
         },
         return_params: build_return_params(r),
+        post_calculate: None,
     };
 
     let note = format!("{}: tabular decision table with {} extracted rows", r.cobol_name, branches.len());
@@ -1223,6 +1301,58 @@ mod tests {
             (files[0].confidence - 1.0).abs() < f64::EPSILON,
             "Typed AST confidence should be 1.0, got {}",
             files[0].confidence
+        );
+    }
+
+    #[test]
+    fn match_arms_extract_real_conditions() {
+        let code = r#"
+            #[cobol(program = "TESTPROG")]
+            pub struct WorkingStorage {
+                #[cobol(level = 1, pic = "X(1)")]
+                pub ws_status: PicX,
+                #[cobol(level = 1, pic = "X(10)")]
+                pub ws_result: PicX,
+            }
+
+            #[cobol(section = "RATE-SECTION", reads = "WS-STATUS", writes = "WS-RESULT")]
+            fn check_status(ws: &mut WorkingStorage, ctx: &mut ProgramContext) {
+                match ws.ws_status.to_string().as_str() {
+                    "A" => { move_alphanumeric_literal(b"ACTIVE", &mut ws.ws_result, &ctx.config); }
+                    "C" => { move_alphanumeric_literal(b"CLOSED", &mut ws.ws_result, &ctx.config); }
+                    _ => { move_alphanumeric_literal(b"UNKNOWN", &mut ws.ws_result, &ctx.config); }
+                }
+            }
+        "#;
+        let syn_file = syn::parse_str::<syn::File>(code).unwrap();
+
+        let emitter = RulesEmitter;
+        let ctx = EmitterContext {
+            program_name: "testprog".to_string(),
+            syn_file: &syn_file,
+            source_text: code,
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.rs"),
+        };
+
+        let files = emitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        // Should have real conditions from match patterns, not just wildcards
+        assert!(
+            content.contains("\"A\""),
+            "Should extract literal pattern 'A', got: {content}"
+        );
+        assert!(
+            content.contains("\"C\""),
+            "Should extract literal pattern 'C', got: {content}"
+        );
+        // Wildcard arm should produce *
+        assert!(
+            content.contains("*") || content.contains("_"),
+            "Should have wildcard for default arm, got: {content}"
         );
     }
 }

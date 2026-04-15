@@ -16,6 +16,7 @@ use super::cobol_attrs::{
     AnnotatedFn, FieldCobolAttr,
 };
 use super::dsl_ast::*;
+use super::expr_extract;
 use super::{DslEmitter, DslFile, DslLayer, EmitterContext};
 
 /// Emitter that produces `.xform` files from paragraph functions.
@@ -40,10 +41,14 @@ impl DslEmitter for TransformEmitter {
         // Build field lookup: COBOL name -> (rust_name, FieldCobolAttr)
         let field_map = build_field_map(&fields);
 
-        // Classify functions
+        // Classify functions and build body lookup for expression extraction
         let mut transforms = Vec::new();
+        let mut body_lookup: HashMap<String, &syn::Block> = HashMap::new();
         for f in &fns {
             if let Some(classified) = classify_function(f, &field_map) {
+                if let Some(body) = &f.body {
+                    body_lookup.insert(classified.nexflow_name.clone(), body);
+                }
                 transforms.push(classified);
             }
         }
@@ -58,7 +63,7 @@ impl DslEmitter for TransformEmitter {
         let mut dsl_files = Vec::new();
         for (section_name, section_transforms) in &sections {
             let (content, notes, confidence) =
-                generate_transform_file(section_name, section_transforms, &program);
+                generate_transform_file(section_name, section_transforms, &program, &body_lookup);
             let source_fns: Vec<String> = section_transforms
                 .iter()
                 .map(|t| t.cobol_name.clone())
@@ -225,17 +230,19 @@ pub fn generate_transform_file(
     section_name: &str,
     transforms: &[&ClassifiedTransform],
     program: &str,
+    body_lookup: &HashMap<String, &syn::Block>,
 ) -> (String, Vec<String>, f64) {
     let mut items = Vec::new();
     let mut notes = Vec::new();
 
     for t in transforms {
+        let body = body_lookup.get(&t.nexflow_name).copied();
         match t.kind {
             TransformKind::SingleField => {
-                items.push(build_single_transform(t, &mut notes));
+                items.push(build_single_transform(t, body, &mut notes));
             }
             TransformKind::MultiField => {
-                items.push(build_multi_transform(t, &mut notes));
+                items.push(build_multi_transform(t, body, &mut notes));
             }
             TransformKind::Compose | TransformKind::SectionDispatcher => {
                 items.push(build_compose_transform(t, &mut notes));
@@ -280,6 +287,7 @@ fn build_io_spec(fields: &[String]) -> IoSpec {
 
 fn build_single_transform(
     t: &ClassifiedTransform,
+    body: Option<&syn::Block>,
     notes: &mut Vec<String>,
 ) -> TransformItem {
     let input = build_io_spec(&t.reads);
@@ -299,35 +307,59 @@ fn build_single_transform(
         IoSpec::Single(Ident::new("result"), FieldType::Integer(None))
     };
 
-    // Apply block
-    let apply = if t.writes.len() == 1 {
+    // Extract expressions from function body if available
+    let extracted = body
+        .map(|b| expr_extract::extract_actions_from_block(b))
+        .unwrap_or_default();
+
+    let apply = if !extracted.is_empty() {
+        // Use extracted expressions
+        extracted
+            .iter()
+            .map(|(field, expr)| {
+                ApplyStmt::Assign(Ident::new(field), Expr::Raw(expr.clone()))
+            })
+            .collect()
+    } else if t.writes.len() == 1 {
+        notes.push(format!(
+            "{}: apply block needs manual review -- no expressions extracted",
+            t.cobol_name
+        ));
         vec![ApplyStmt::Assign(
             Ident::new(&cobol_to_snake(&t.writes[0])),
             Expr::Raw(generate_placeholder_expr(&t.reads)),
         )]
     } else {
+        notes.push(format!(
+            "{}: apply block needs manual review -- no expressions extracted",
+            t.cobol_name
+        ));
         vec![ApplyStmt::Assign(
             Ident::new("result"),
             Expr::Lit(Literal::Int(0)),
         )]
     };
-    notes.push(format!(
-        "{}: apply block needs manual review -- expression extraction not yet implemented",
-        t.cobol_name
-    ));
+
+    let pure = body.map_or(true, |b| !expr_extract::block_has_side_effects(b));
 
     TransformItem::Transform(TransformDef {
         name: Ident::new(&t.nexflow_name),
         comment: Some(format!("COBOL paragraph: {}", t.cobol_name)),
-        pure: true,
+        metadata: None,
+        pure,
+        cache: None,
         input,
         output,
         apply,
+        validate_input: None,
+        validate_output: None,
+        on_error: None,
     })
 }
 
 fn build_multi_transform(
     t: &ClassifiedTransform,
+    body: Option<&syn::Block>,
     notes: &mut Vec<String>,
 ) -> TransformItem {
     let (input, output) = if t.reads.is_empty() && t.writes.is_empty() {
@@ -339,28 +371,47 @@ fn build_multi_transform(
         (build_io_spec(&t.reads), build_io_spec(&t.writes))
     };
 
-    let mappings: Vec<MappingEntry> = t
-        .writes
-        .iter()
-        .map(|w| {
-            let field_name = Ident::new(&cobol_to_snake(w));
-            MappingEntry {
-                target: field_name.clone(),
-                source: Expr::Field(field_name),
-            }
-        })
-        .collect();
-    notes.push(format!(
-        "{}: mappings need manual review -- expression extraction not yet implemented",
-        t.cobol_name
-    ));
+    // Extract expressions from function body if available
+    let extracted = body
+        .map(|b| expr_extract::extract_actions_from_block(b))
+        .unwrap_or_default();
+
+    let mappings: Vec<MappingEntry> = if !extracted.is_empty() {
+        extracted
+            .iter()
+            .map(|(field, expr)| MappingEntry {
+                target: Ident::new(field),
+                source: Expr::Raw(expr.clone()),
+            })
+            .collect()
+    } else {
+        notes.push(format!(
+            "{}: mappings need manual review -- no expressions extracted",
+            t.cobol_name
+        ));
+        t.writes
+            .iter()
+            .map(|w| {
+                let field_name = Ident::new(&cobol_to_snake(w));
+                MappingEntry {
+                    target: field_name.clone(),
+                    source: Expr::Field(field_name),
+                }
+            })
+            .collect()
+    };
 
     TransformItem::TransformBlock(TransformBlockDef {
         name: Ident::new(&t.nexflow_name),
         comment: Some(format!("COBOL paragraph: {}", t.cobol_name)),
+        metadata: None,
+        use_decls: None,
         input,
         output,
         body: TransformBlockBody::Mappings(mappings),
+        validate_input: None,
+        validate_output: None,
+        on_error: None,
     })
 }
 
@@ -380,10 +431,10 @@ fn build_compose_transform(
         IoSpec::Single(Ident::new("output"), FieldType::Integer(None))
     };
 
-    let refs: Vec<Ident> = t
+    let refs: Vec<ComposeRef> = t
         .performs
         .iter()
-        .map(|p| Ident::new(&cobol_to_snake(p)))
+        .map(|p| ComposeRef::Simple(Ident::new(&cobol_to_snake(p))))
         .collect();
 
     let kind_label = if matches!(t.kind, TransformKind::SectionDispatcher) {
@@ -395,12 +446,17 @@ fn build_compose_transform(
     TransformItem::TransformBlock(TransformBlockDef {
         name: Ident::new(&t.nexflow_name),
         comment: Some(format!("COBOL {}: {}", kind_label, t.cobol_name)),
+        metadata: None,
+        use_decls: None,
         input,
         output,
         body: TransformBlockBody::Compose(ComposeBlock {
             compose_type: ComposeType::Sequential,
             refs,
         }),
+        validate_input: None,
+        validate_output: None,
+        on_error: None,
     })
 }
 
@@ -508,6 +564,7 @@ mod tests {
         let f = AnnotatedFn {
             name: "run".to_string(),
             cobol_attr: Some(super::super::cobol_attrs::FnCobolAttr::default()),
+            body: None,
         };
         assert!(classify_function(&f, &HashMap::new()).is_none());
     }
@@ -522,6 +579,7 @@ mod tests {
                 reads: vec![],
                 writes: vec!["WS-COUNT".to_string()],
             }),
+            body: None,
         };
         let classified = classify_function(&f, &HashMap::new()).unwrap();
         assert!(matches!(classified.kind, TransformKind::SingleField));
@@ -538,6 +596,7 @@ mod tests {
                 reads: vec!["WS-I".to_string(), "WS-SUM".to_string()],
                 writes: vec!["WS-I".to_string(), "WS-SUM".to_string()],
             }),
+            body: None,
         };
         let classified = classify_function(&f, &HashMap::new()).unwrap();
         assert!(matches!(classified.kind, TransformKind::MultiField));
@@ -553,6 +612,7 @@ mod tests {
                 reads: vec![],
                 writes: vec![],
             }),
+            body: None,
         };
         // No reads, no writes, no performs -- should return None (empty dispatcher)
         assert!(classify_function(&f, &HashMap::new()).is_none());
@@ -571,6 +631,7 @@ mod tests {
                 reads: vec!["WS-COUNT".to_string(), "WS-SUM".to_string()],
                 writes: vec![],
             }),
+            body: None,
         };
         let classified = classify_function(&f, &HashMap::new()).unwrap();
         assert!(matches!(classified.kind, TransformKind::Compose));
@@ -737,5 +798,44 @@ mod tests {
         assert!(content.contains("pure : true"));
         // Should NOT contain transform_block
         assert!(!content.contains("transform_block init_count"));
+    }
+
+    #[test]
+    fn legacy_transform_extracts_add_expression() {
+        let code = r#"
+            #[cobol(program = "TESTPROG")]
+            pub struct WorkingStorage {
+                #[cobol(level = 1, pic = "9(5)")]
+                pub ws_total: PackedDecimal,
+                #[cobol(level = 1, pic = "9(5)")]
+                pub ws_amount: PackedDecimal,
+            }
+
+            #[cobol(section = "CALC-SECTION", reads = "WS-AMOUNT", writes = "WS-TOTAL")]
+            fn add_amount(ws: &mut WorkingStorage, ctx: &mut ProgramContext) {
+                cobol_add(&ws.ws_amount, &mut ws.ws_total, None, &ctx.config);
+            }
+        "#;
+        let syn_file = syn::parse_str::<syn::File>(code).unwrap();
+
+        let emitter = TransformEmitter;
+        let ctx = EmitterContext {
+            program_name: "testprog".to_string(),
+            syn_file: &syn_file,
+            source_text: code,
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: std::path::PathBuf::from("test.rs"),
+        };
+
+        let files = emitter.emit(&ctx);
+        assert!(!files.is_empty());
+        let content = &files[0].content;
+        // Should contain real expression instead of placeholder
+        assert!(
+            content.contains("ws_total + ws_amount"),
+            "Should extract cobol_add expression, got: {content}"
+        );
     }
 }

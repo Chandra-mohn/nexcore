@@ -288,9 +288,12 @@ pub struct DecisionTable {
     pub name: Ident,
     pub comment: Option<String>,
     pub hit_policy: HitPolicy,
+    pub description: Option<String>,
+    pub version: Option<String>,
     pub given: Vec<GivenParam>,
     pub decide: DecideMatrix,
     pub return_params: Vec<ReturnParam>,
+    pub post_calculate: Option<Vec<RuleStmt>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -396,10 +399,15 @@ pub enum TransformItem {
 pub struct TransformDef {
     pub name: Ident,
     pub comment: Option<String>,
+    pub metadata: Option<TransformMetadata>,
     pub pure: bool,
+    pub cache: Option<CacheDecl>,
     pub input: IoSpec,
     pub output: IoSpec,
     pub apply: Vec<ApplyStmt>,
+    pub validate_input: Option<Vec<ValidationRule>>,
+    pub validate_output: Option<Vec<ValidationRule>>,
+    pub on_error: Option<Vec<ErrorStatement>>,
 }
 
 /// `transform_block ... end` (multi-field or compose).
@@ -407,9 +415,114 @@ pub struct TransformDef {
 pub struct TransformBlockDef {
     pub name: Ident,
     pub comment: Option<String>,
+    pub metadata: Option<TransformMetadata>,
+    pub use_decls: Option<Vec<Ident>>,
     pub input: IoSpec,
     pub output: IoSpec,
     pub body: TransformBlockBody,
+    pub validate_input: Option<Vec<ValidationRule>>,
+    pub validate_output: Option<Vec<ValidationRule>>,
+    pub on_error: Option<Vec<ErrorStatement>>,
+}
+
+// ============================================================================
+// Validation + Error Handling Types
+// ============================================================================
+
+/// A validation rule for validate_input / validate_output blocks.
+#[derive(Debug, Clone, Serialize)]
+pub enum ValidationRule {
+    /// `require expr else "message"`
+    Require(Expr, ValidationMessage),
+    /// `expr : "message"`
+    Simple(Expr, ValidationMessage),
+}
+
+/// Message attached to a validation rule.
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationMessage {
+    pub text: String,
+    pub code: Option<String>,
+    pub severity: Option<Severity>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+        })
+    }
+}
+
+/// A statement inside an `on_error ... end` block.
+#[derive(Debug, Clone, Serialize)]
+pub enum ErrorStatement {
+    /// `action : reject|skip|use_default|raise`
+    Action(ErrorAction),
+    /// `log_error("message")`
+    LogError(String),
+    /// `error_code : "CODE"`
+    ErrorCode(String),
+    /// `emit with defaults|partial`
+    Emit(EmitMode),
+    /// `reject with "message"` or `reject with code "CODE"`
+    Reject(String),
+    /// `default : expr`
+    Default(Expr),
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum ErrorAction {
+    Reject,
+    Skip,
+    UseDefault,
+    Raise,
+}
+
+impl fmt::Display for ErrorAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Reject => "reject",
+            Self::Skip => "skip",
+            Self::UseDefault => "use_default",
+            Self::Raise => "raise",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum EmitMode {
+    Defaults,
+    Partial,
+}
+
+// ============================================================================
+// Metadata, Use, Cache Types
+// ============================================================================
+
+/// Transform metadata (version, description).
+#[derive(Debug, Clone, Serialize)]
+pub struct TransformMetadata {
+    pub version: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Cache declaration for transforms.
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheDecl {
+    /// Cache TTL as a raw duration string (e.g., "5 minutes", "3600s").
+    pub ttl: Option<String>,
+    /// Cache key fields.
+    pub key: Option<Vec<Ident>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -445,17 +558,29 @@ pub struct MappingEntry {
 #[derive(Debug, Clone, Serialize)]
 pub struct ComposeBlock {
     pub compose_type: ComposeType,
-    pub refs: Vec<Ident>,
+    pub refs: Vec<ComposeRef>,
+}
+
+/// A reference inside a compose block, optionally conditional.
+#[derive(Debug, Clone, Serialize)]
+pub enum ComposeRef {
+    /// Simple transform reference: `transform_name`
+    Simple(Ident),
+    /// Conditional reference: `when expr : transform_name`
+    When(Expr, Ident),
+    /// Default fallback: `otherwise : transform_name`
+    Otherwise(Ident),
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
-pub enum ComposeType { Sequential, Parallel }
+pub enum ComposeType { Sequential, Parallel, Conditional }
 
 impl fmt::Display for ComposeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Sequential => "sequential",
             Self::Parallel => "parallel",
+            Self::Conditional => "conditional",
         })
     }
 }
@@ -477,6 +602,7 @@ pub struct ProcessFile {
 pub struct ProcessDef {
     pub name: Ident,
     pub mode: Option<ProcessMode>,
+    pub execution: Option<ExecutionBlock>,
     pub body: Vec<ProcessStmt>,
 }
 
@@ -492,6 +618,13 @@ impl fmt::Display for ProcessMode {
     }
 }
 
+/// Execution block: parallelism and partitioning hints.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutionBlock {
+    pub parallelism: Option<u32>,
+    pub partition_by: Option<Vec<Ident>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum ProcessStmt {
     Comment(String),
@@ -499,18 +632,78 @@ pub enum ProcessStmt {
     TransformUsing { input: Ident, using: Ident, output: Ident },
     EvaluateUsing(Ident),
     Emit(EmitBlock),
+    /// Conditional routing: `route using rule_name ...`
+    Route(RouteBlock),
+    /// Parallel fan-out: `parallel ... branch ... end`
+    Parallel(ParallelBlock),
+    /// Loop: `loop ... end` (from PERFORM UNTIL)
+    Loop(LoopBlock),
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReceiveBlock {
     pub name: Ident,
     pub schema: Option<Ident>,
+    pub connector: Option<ConnectorSpec>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EmitBlock {
     pub target: Ident,
     pub schema: Option<Ident>,
+    pub connector: Option<ConnectorSpec>,
+}
+
+/// Connector specification for receive/emit.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectorSpec {
+    pub connector_type: ConnectorType,
+    pub config: Option<String>,
+}
+
+/// Connector type (source/target agnostic).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum ConnectorType {
+    File,
+    Csv,
+    Parquet,
+    Db,
+    Kafka,
+    StateStore,
+}
+
+impl fmt::Display for ConnectorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::File => "file",
+            Self::Csv => "csv",
+            Self::Parquet => "parquet",
+            Self::Db => "db",
+            Self::Kafka => "kafka",
+            Self::StateStore => "state_store",
+        })
+    }
+}
+
+/// Route block: conditional routing to different targets.
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteBlock {
+    pub using: Ident,
+    pub destinations: Vec<(Option<String>, Ident)>,
+    pub otherwise: Option<Ident>,
+}
+
+/// Parallel fan-out block.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParallelBlock {
+    pub branches: Vec<(Ident, Vec<ProcessStmt>)>,
+}
+
+/// Loop block (from PERFORM UNTIL).
+#[derive(Debug, Clone, Serialize)]
+pub struct LoopBlock {
+    pub condition: Option<String>,
+    pub body: Vec<ProcessStmt>,
 }
 
 // ============================================================================
@@ -708,6 +901,12 @@ impl DecisionTable {
         }
         let _ = writeln!(out, "decision_table {}", self.name);
         let _ = writeln!(out, "{}hit_policy {}", indent(1), self.hit_policy);
+        if let Some(desc) = &self.description {
+            let _ = writeln!(out, "{}description : \"{desc}\"", indent(1));
+        }
+        if let Some(ver) = &self.version {
+            let _ = writeln!(out, "{}version : {ver}", indent(1));
+        }
         out.push('\n');
 
         // Given block
@@ -745,6 +944,23 @@ impl DecisionTable {
         let _ = writeln!(out, "{}return:", indent(1));
         for p in &self.return_params {
             let _ = writeln!(out, "{}{} : {}", indent(2), p.name, p.param_type);
+        }
+
+        // Post-calculate block
+        if let Some(stmts) = &self.post_calculate {
+            out.push('\n');
+            let _ = writeln!(out, "{}post_calculate:", indent(1));
+            for stmt in stmts {
+                match stmt {
+                    RuleStmt::Set(name, expr) => {
+                        let _ = writeln!(out, "{}set {} = {}", indent(2), name, expr);
+                    }
+                    RuleStmt::Let(name, expr) => {
+                        let _ = writeln!(out, "{}let {} = {}", indent(2), name, expr);
+                    }
+                    _ => {}
+                }
+            }
         }
 
         let _ = writeln!(out, "end");
@@ -834,13 +1050,14 @@ impl TransformDef {
             let _ = writeln!(out, "// {c}");
         }
         let _ = writeln!(out, "transform {}", self.name);
-        if self.pure {
-            let _ = writeln!(out, "{}pure : true", indent(1));
-        }
+        write_metadata(&mut out, &self.metadata, 1);
+        let _ = writeln!(out, "{}pure : {}", indent(1), if self.pure { "true" } else { "false" });
+        write_cache_decl(&mut out, &self.cache, 1);
         out.push('\n');
         write_io_spec(&mut out, "input", &self.input, 1);
         out.push('\n');
         write_io_spec(&mut out, "output", &self.output, 1);
+        write_validation_block(&mut out, "validate_input", &self.validate_input, 1);
         out.push('\n');
         let _ = writeln!(out, "{}apply", indent(1));
         for stmt in &self.apply {
@@ -854,6 +1071,8 @@ impl TransformDef {
             }
         }
         let _ = writeln!(out, "{}end", indent(1));
+        write_validation_block(&mut out, "validate_output", &self.validate_output, 1);
+        write_on_error_block(&mut out, &self.on_error, 1);
         let _ = writeln!(out, "end");
         out
     }
@@ -866,10 +1085,13 @@ impl TransformBlockDef {
             let _ = writeln!(out, "// {c}");
         }
         let _ = writeln!(out, "transform_block {}", self.name);
+        write_metadata(&mut out, &self.metadata, 1);
+        write_use_block(&mut out, &self.use_decls, 1);
         out.push('\n');
         write_io_spec(&mut out, "input", &self.input, 1);
         out.push('\n');
         write_io_spec(&mut out, "output", &self.output, 1);
+        write_validation_block(&mut out, "validate_input", &self.validate_input, 1);
         out.push('\n');
         match &self.body {
             TransformBlockBody::Mappings(mappings) => {
@@ -882,11 +1104,23 @@ impl TransformBlockDef {
             TransformBlockBody::Compose(compose) => {
                 let _ = writeln!(out, "{}compose {}", indent(1), compose.compose_type);
                 for r in &compose.refs {
-                    let _ = writeln!(out, "{}{r}", indent(2));
+                    match r {
+                        ComposeRef::Simple(id) => {
+                            let _ = writeln!(out, "{}{id}", indent(2));
+                        }
+                        ComposeRef::When(expr, id) => {
+                            let _ = writeln!(out, "{}when {expr} : {id}", indent(2));
+                        }
+                        ComposeRef::Otherwise(id) => {
+                            let _ = writeln!(out, "{}otherwise : {id}", indent(2));
+                        }
+                    }
                 }
                 let _ = writeln!(out, "{}end", indent(1));
             }
         }
+        write_validation_block(&mut out, "validate_output", &self.validate_output, 1);
+        write_on_error_block(&mut out, &self.on_error, 1);
         let _ = writeln!(out, "end");
         out
     }
@@ -909,6 +1143,126 @@ fn write_io_spec(out: &mut String, keyword: &str, spec: &IoSpec, level: usize) {
             }
         }
     }
+}
+
+fn write_metadata(out: &mut String, metadata: &Option<TransformMetadata>, level: usize) {
+    let meta = match metadata {
+        Some(m) => m,
+        None => return,
+    };
+    if let Some(ver) = &meta.version {
+        let _ = writeln!(out, "{}version : {ver}", indent(level));
+    }
+    if let Some(desc) = &meta.description {
+        let _ = writeln!(out, "{}description : \"{desc}\"", indent(level));
+    }
+}
+
+fn write_cache_decl(out: &mut String, cache: &Option<CacheDecl>, level: usize) {
+    let c = match cache {
+        Some(c) => c,
+        None => return,
+    };
+    match (&c.ttl, &c.key) {
+        (Some(ttl), None) => {
+            let _ = writeln!(out, "{}cache : {ttl}", indent(level));
+        }
+        (ttl, key) => {
+            let _ = writeln!(out, "{}cache", indent(level));
+            if let Some(ttl) = ttl {
+                let _ = writeln!(out, "{}ttl : {ttl}", indent(level + 1));
+            }
+            if let Some(fields) = key {
+                let names: Vec<&str> = fields.iter().map(|f| f.as_str()).collect();
+                let _ = writeln!(out, "{}key : [{}]", indent(level + 1), names.join(", "));
+            }
+            let _ = writeln!(out, "{}end", indent(level));
+        }
+    }
+}
+
+fn write_use_block(out: &mut String, use_decls: &Option<Vec<Ident>>, level: usize) {
+    let decls = match use_decls {
+        Some(d) if !d.is_empty() => d,
+        _ => return,
+    };
+    let _ = write!(out, "{}use", indent(level));
+    for d in decls {
+        let _ = write!(out, " {d}");
+    }
+    let _ = writeln!(out, " end");
+}
+
+fn write_validation_block(
+    out: &mut String,
+    keyword: &str,
+    rules: &Option<Vec<ValidationRule>>,
+    level: usize,
+) {
+    let rules = match rules {
+        Some(r) if !r.is_empty() => r,
+        _ => return,
+    };
+    out.push('\n');
+    let _ = writeln!(out, "{}{keyword}", indent(level));
+    for rule in rules {
+        match rule {
+            ValidationRule::Require(expr, msg) => {
+                let _ = write!(out, "{}require {} else \"{}\"", indent(level + 1), expr, msg.text);
+                if let Some(code) = &msg.code {
+                    let _ = write!(out, " code : \"{code}\"");
+                }
+                if let Some(sev) = &msg.severity {
+                    let _ = write!(out, " severity : {sev}");
+                }
+                let _ = writeln!(out);
+            }
+            ValidationRule::Simple(expr, msg) => {
+                let _ = writeln!(out, "{}{} : \"{}\"", indent(level + 1), expr, msg.text);
+            }
+        }
+    }
+    let _ = writeln!(out, "{}end", indent(level));
+}
+
+fn write_on_error_block(
+    out: &mut String,
+    stmts: &Option<Vec<ErrorStatement>>,
+    level: usize,
+) {
+    let stmts = match stmts {
+        Some(s) if !s.is_empty() => s,
+        _ => return,
+    };
+    out.push('\n');
+    let _ = writeln!(out, "{}on_error", indent(level));
+    for stmt in stmts {
+        match stmt {
+            ErrorStatement::Action(action) => {
+                let _ = writeln!(out, "{}action : {action}", indent(level + 1));
+            }
+            ErrorStatement::LogError(msg) => {
+                let _ = writeln!(out, "{}log_error(\"{msg}\")", indent(level + 1));
+            }
+            ErrorStatement::ErrorCode(code) => {
+                let _ = writeln!(out, "{}error_code : \"{code}\"", indent(level + 1));
+            }
+            ErrorStatement::Emit(mode) => {
+                let mode_str = match mode {
+                    EmitMode::Defaults => "defaults",
+                    EmitMode::Partial => "partial",
+                };
+                let _ = writeln!(out, "{}emit with {mode_str}", indent(level + 1));
+            }
+            ErrorStatement::Reject(msg) => {
+                let _ = writeln!(out, "{}reject with \"{msg}\"", indent(level + 1));
+            }
+            ErrorStatement::Default(expr) => {
+                let _ = writeln!(out, "{}default : {expr}", indent(level + 1));
+            }
+        }
+    }
+    let _ = writeln!(out, "{}end", indent(level));
 }
 
 impl ProcessFile {
@@ -936,36 +1290,97 @@ impl ProcessDef {
         if let Some(mode) = &self.mode {
             let _ = writeln!(out, "{}mode {mode}", indent(1));
         }
+        if let Some(exec) = &self.execution {
+            if let Some(p) = exec.parallelism {
+                let _ = writeln!(out, "{}parallelism {p}", indent(1));
+            }
+            if let Some(fields) = &exec.partition_by {
+                let names: Vec<&str> = fields.iter().map(|f| f.as_str()).collect();
+                let _ = writeln!(out, "{}partition by {}", indent(1), names.join(", "));
+            }
+        }
         out.push('\n');
         for stmt in &self.body {
-            match stmt {
-                ProcessStmt::Comment(c) => {
-                    let _ = writeln!(out, "{}// {c}", indent(1));
-                }
-                ProcessStmt::Receive(r) => {
-                    let _ = writeln!(out, "{}receive {}", indent(1), r.name);
-                    if let Some(s) = &r.schema {
-                        let _ = writeln!(out, "{}schema {s}", indent(2));
-                    }
-                }
-                ProcessStmt::TransformUsing { input, using, output } => {
-                    let _ = writeln!(out, "{}transform {} using {} into {}",
-                        indent(1), input, using, output);
-                }
-                ProcessStmt::EvaluateUsing(name) => {
-                    let _ = writeln!(out, "{}evaluate using {name}", indent(1));
-                }
-                ProcessStmt::Emit(e) => {
-                    let _ = writeln!(out, "{}emit to {}", indent(1), e.target);
-                    if let Some(s) = &e.schema {
-                        let _ = writeln!(out, "{}schema {s}", indent(2));
-                    }
-                }
-            }
+            write_process_stmt(&mut out, stmt, 1);
         }
         out.push('\n');
         let _ = writeln!(out, "end");
         out
+    }
+}
+
+fn write_process_stmt(out: &mut String, stmt: &ProcessStmt, level: usize) {
+    match stmt {
+        ProcessStmt::Comment(c) => {
+            let _ = writeln!(out, "{}// {c}", indent(level));
+        }
+        ProcessStmt::Receive(r) => {
+            let _ = write!(out, "{}receive {}", indent(level), r.name);
+            if let Some(conn) = &r.connector {
+                let _ = write!(out, " from {}", conn.connector_type);
+                if let Some(cfg) = &conn.config {
+                    let _ = write!(out, " \"{cfg}\"");
+                }
+            }
+            let _ = writeln!(out);
+            if let Some(s) = &r.schema {
+                let _ = writeln!(out, "{}schema {s}", indent(level + 1));
+            }
+        }
+        ProcessStmt::TransformUsing { input, using, output } => {
+            let _ = writeln!(out, "{}transform {} using {} into {}",
+                indent(level), input, using, output);
+        }
+        ProcessStmt::EvaluateUsing(name) => {
+            let _ = writeln!(out, "{}evaluate using {name}", indent(level));
+        }
+        ProcessStmt::Emit(e) => {
+            let _ = write!(out, "{}emit to {}", indent(level), e.target);
+            if let Some(conn) = &e.connector {
+                let _ = write!(out, " {}", conn.connector_type);
+                if let Some(cfg) = &conn.config {
+                    let _ = write!(out, " \"{cfg}\"");
+                }
+            }
+            let _ = writeln!(out);
+            if let Some(s) = &e.schema {
+                let _ = writeln!(out, "{}schema {s}", indent(level + 1));
+            }
+        }
+        ProcessStmt::Route(r) => {
+            let _ = writeln!(out, "{}route using {}", indent(level), r.using);
+            for (cond, target) in &r.destinations {
+                if let Some(c) = cond {
+                    let _ = writeln!(out, "{}\"{c}\" to {target}", indent(level + 1));
+                } else {
+                    let _ = writeln!(out, "{}to {target}", indent(level + 1));
+                }
+            }
+            if let Some(otherwise) = &r.otherwise {
+                let _ = writeln!(out, "{}otherwise to {otherwise}", indent(level + 1));
+            }
+        }
+        ProcessStmt::Parallel(p) => {
+            let _ = writeln!(out, "{}parallel", indent(level));
+            for (name, body) in &p.branches {
+                let _ = writeln!(out, "{}branch {name}", indent(level + 1));
+                for s in body {
+                    write_process_stmt(out, s, level + 2);
+                }
+                let _ = writeln!(out, "{}end", indent(level + 1));
+            }
+            let _ = writeln!(out, "{}end", indent(level));
+        }
+        ProcessStmt::Loop(l) => {
+            let _ = writeln!(out, "{}loop", indent(level));
+            if let Some(cond) = &l.condition {
+                let _ = writeln!(out, "{}// until: {cond}", indent(level + 1));
+            }
+            for s in &l.body {
+                write_process_stmt(out, s, level + 1);
+            }
+            let _ = writeln!(out, "{}end", indent(level));
+        }
     }
 }
 
@@ -1042,6 +1457,8 @@ mod tests {
             name: Ident::new("rate_lookup"),
             comment: Some("COBOL paragraph: RATE-PARA".to_string()),
             hit_policy: HitPolicy::FirstMatch,
+            description: None,
+            version: None,
             given: vec![GivenParam {
                 name: Ident::new("ws_a"),
                 param_type: RulesParamType::Number,
@@ -1059,6 +1476,7 @@ mod tests {
                 name: Ident::new("ws_result"),
                 param_type: RulesParamType::Text,
             }],
+            post_calculate: None,
         };
 
         let text = dt.to_text();
@@ -1072,6 +1490,101 @@ mod tests {
         assert!(text.contains("otherwise"));
         assert!(text.contains("return:"));
         assert!(text.contains("end"));
+    }
+
+    #[test]
+    fn decision_table_with_description_version() {
+        let dt = DecisionTable {
+            name: Ident::new("rate_calc"),
+            comment: None,
+            hit_policy: HitPolicy::FirstMatch,
+            description: Some("Calculate interest rate based on account type".to_string()),
+            version: Some("1.0.0".to_string()),
+            given: vec![GivenParam {
+                name: Ident::new("acct_type"),
+                param_type: RulesParamType::Text,
+            }],
+            decide: DecideMatrix {
+                condition_col: "acct_type".to_string(),
+                action_cols: vec![Ident::new("rate")],
+                rows: vec![
+                    DecideRow { condition: "\"S\"".to_string(), actions: vec!["3.5".to_string()] },
+                ],
+            },
+            return_params: vec![ReturnParam {
+                name: Ident::new("rate"),
+                param_type: RulesParamType::Number,
+            }],
+            post_calculate: None,
+        };
+
+        let text = dt.to_text();
+        assert!(text.contains("description : \"Calculate interest rate"), "Should have description: {text}");
+        assert!(text.contains("version : 1.0.0"), "Should have version: {text}");
+    }
+
+    #[test]
+    fn decision_table_with_post_calculate() {
+        let dt = DecisionTable {
+            name: Ident::new("tax_calc"),
+            comment: None,
+            hit_policy: HitPolicy::FirstMatch,
+            description: None,
+            version: None,
+            given: vec![GivenParam {
+                name: Ident::new("income"),
+                param_type: RulesParamType::Money,
+            }],
+            decide: DecideMatrix {
+                condition_col: "income".to_string(),
+                action_cols: vec![Ident::new("rate")],
+                rows: vec![
+                    DecideRow { condition: "> 100000".to_string(), actions: vec!["0.30".to_string()] },
+                ],
+            },
+            return_params: vec![ReturnParam {
+                name: Ident::new("tax"),
+                param_type: RulesParamType::Money,
+            }],
+            post_calculate: Some(vec![
+                RuleStmt::Let(
+                    Ident::new("tax"),
+                    Expr::Binary(
+                        Box::new(Expr::Field(Ident::new("income"))),
+                        BinOp::Mul,
+                        Box::new(Expr::Field(Ident::new("rate"))),
+                    ),
+                ),
+            ]),
+        };
+
+        let text = dt.to_text();
+        assert!(text.contains("post_calculate:"), "Should have post_calculate: {text}");
+        assert!(text.contains("let tax = income * rate"), "Should have let statement: {text}");
+    }
+
+    #[test]
+    fn decision_table_no_optional_fields() {
+        let dt = DecisionTable {
+            name: Ident::new("simple"),
+            comment: None,
+            hit_policy: HitPolicy::FirstMatch,
+            description: None,
+            version: None,
+            given: vec![],
+            decide: DecideMatrix {
+                condition_col: "x".to_string(),
+                action_cols: vec![],
+                rows: vec![],
+            },
+            return_params: vec![],
+            post_calculate: None,
+        };
+
+        let text = dt.to_text();
+        assert!(!text.contains("description"), "Should NOT have description: {text}");
+        assert!(!text.contains("version"), "Should NOT have version: {text}");
+        assert!(!text.contains("post_calculate"), "Should NOT have post_calculate: {text}");
     }
 
     #[test]
@@ -1130,16 +1643,21 @@ mod tests {
         let tb = TransformBlockDef {
             name: Ident::new("processing_section"),
             comment: Some("COBOL section: PROCESSING-SECTION".to_string()),
+            metadata: None,
+            use_decls: None,
             input: IoSpec::Single(Ident::new("input"), FieldType::Integer(None)),
             output: IoSpec::Single(Ident::new("output"), FieldType::Integer(None)),
             body: TransformBlockBody::Compose(ComposeBlock {
                 compose_type: ComposeType::Sequential,
                 refs: vec![
-                    Ident::new("init_para"),
-                    Ident::new("calc_para"),
-                    Ident::new("finish_para"),
+                    ComposeRef::Simple(Ident::new("init_para")),
+                    ComposeRef::Simple(Ident::new("calc_para")),
+                    ComposeRef::Simple(Ident::new("finish_para")),
                 ],
             }),
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
         };
 
         let text = tb.to_text();
@@ -1162,10 +1680,12 @@ mod tests {
             processes: vec![ProcessDef {
                 name: Ident::new("testprog"),
                 mode: Some(ProcessMode::Batch),
+                execution: None,
                 body: vec![
                     ProcessStmt::Receive(ReceiveBlock {
                         name: Ident::new("input_records"),
                         schema: Some(Ident::new("testprog_input")),
+                        connector: None,
                     }),
                     ProcessStmt::Comment("Entry: RUN".to_string()),
                     ProcessStmt::TransformUsing {
@@ -1177,6 +1697,7 @@ mod tests {
                     ProcessStmt::Emit(EmitBlock {
                         target: Ident::new("output_records"),
                         schema: Some(Ident::new("testprog_output")),
+                        connector: None,
                     }),
                 ],
             }],
@@ -1191,6 +1712,297 @@ mod tests {
         assert!(text.contains("evaluate using decide_para"));
         assert!(text.contains("emit to output_records"));
         assert!(text.contains("end"));
+    }
+
+    #[test]
+    fn on_error_block_serialization() {
+        let td = TransformDef {
+            name: Ident::new("calc_para"),
+            comment: None,
+            metadata: None,
+            pure: true,
+            cache: None,
+            input: IoSpec::Single(Ident::new("input"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("result"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(
+                Ident::new("result"),
+                Expr::Binary(
+                    Box::new(Expr::Field(Ident::new("a"))),
+                    BinOp::Add,
+                    Box::new(Expr::Field(Ident::new("b"))),
+                ),
+            )],
+            validate_input: None,
+            validate_output: None,
+            on_error: Some(vec![
+                ErrorStatement::Action(ErrorAction::Raise),
+                ErrorStatement::LogError("ON SIZE ERROR in COMPUTE".to_string()),
+                ErrorStatement::ErrorCode("SIZE_ERROR".to_string()),
+            ]),
+        };
+
+        let text = td.to_text();
+        assert!(text.contains("on_error"), "Should have on_error block: {text}");
+        assert!(text.contains("action : raise"), "Should have action: {text}");
+        assert!(text.contains("log_error(\"ON SIZE ERROR in COMPUTE\")"), "Should have log: {text}");
+        assert!(text.contains("error_code : \"SIZE_ERROR\""), "Should have code: {text}");
+        // on_error block should be properly terminated
+        let on_error_pos = text.find("on_error").unwrap();
+        let after_on_error = &text[on_error_pos..];
+        assert!(after_on_error.contains("end"), "on_error block should have end: {after_on_error}");
+    }
+
+    #[test]
+    fn validation_block_serialization() {
+        let td = TransformDef {
+            name: Ident::new("validate_para"),
+            comment: None,
+            metadata: None,
+            pure: true,
+            cache: None,
+            input: IoSpec::Single(Ident::new("amount"), FieldType::Decimal(9, 2)),
+            output: IoSpec::Single(Ident::new("result"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(
+                Ident::new("result"),
+                Expr::Field(Ident::new("amount")),
+            )],
+            validate_input: Some(vec![
+                ValidationRule::Require(
+                    Expr::Binary(
+                        Box::new(Expr::Field(Ident::new("amount"))),
+                        BinOp::Ge,
+                        Box::new(Expr::Lit(Literal::Int(0))),
+                    ),
+                    ValidationMessage {
+                        text: "Amount must be non-negative".to_string(),
+                        code: None,
+                        severity: None,
+                    },
+                ),
+            ]),
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = td.to_text();
+        assert!(text.contains("validate_input"), "Should have validate_input: {text}");
+        assert!(text.contains("require amount >= 0 else"), "Should have require rule: {text}");
+        assert!(text.contains("Amount must be non-negative"), "Should have message: {text}");
+    }
+
+    #[test]
+    fn conditional_compose_serialization() {
+        let tb = TransformBlockDef {
+            name: Ident::new("dispatch_para"),
+            comment: None,
+            metadata: None,
+            use_decls: None,
+            input: IoSpec::Single(Ident::new("status"), FieldType::String(Some(1))),
+            output: IoSpec::Single(Ident::new("result"), FieldType::Integer(None)),
+            body: TransformBlockBody::Compose(ComposeBlock {
+                compose_type: ComposeType::Conditional,
+                refs: vec![
+                    ComposeRef::When(
+                        Expr::Binary(
+                            Box::new(Expr::Field(Ident::new("status"))),
+                            BinOp::Eq,
+                            Box::new(Expr::Lit(Literal::Str("A".to_string()))),
+                        ),
+                        Ident::new("process_active"),
+                    ),
+                    ComposeRef::When(
+                        Expr::Binary(
+                            Box::new(Expr::Field(Ident::new("status"))),
+                            BinOp::Eq,
+                            Box::new(Expr::Lit(Literal::Str("C".to_string()))),
+                        ),
+                        Ident::new("process_closed"),
+                    ),
+                    ComposeRef::Otherwise(Ident::new("process_default")),
+                ],
+            }),
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = tb.to_text();
+        assert!(text.contains("compose conditional"), "Should have conditional: {text}");
+        assert!(text.contains("when status == \"A\" : process_active"), "Should have when A: {text}");
+        assert!(text.contains("when status == \"C\" : process_closed"), "Should have when C: {text}");
+        assert!(text.contains("otherwise : process_default"), "Should have otherwise: {text}");
+    }
+
+    #[test]
+    fn simple_compose_backward_compat() {
+        let tb = TransformBlockDef {
+            name: Ident::new("seq_para"),
+            comment: None,
+            metadata: None,
+            use_decls: None,
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            body: TransformBlockBody::Compose(ComposeBlock {
+                compose_type: ComposeType::Sequential,
+                refs: vec![
+                    ComposeRef::Simple(Ident::new("step_a")),
+                    ComposeRef::Simple(Ident::new("step_b")),
+                ],
+            }),
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = tb.to_text();
+        assert!(text.contains("compose sequential"), "Should have sequential: {text}");
+        assert!(text.contains("step_a"), "Should have step_a: {text}");
+        assert!(text.contains("step_b"), "Should have step_b: {text}");
+        // Should NOT have when/otherwise
+        assert!(!text.contains("when "), "Sequential should not have when: {text}");
+    }
+
+    #[test]
+    fn no_on_error_no_block() {
+        let td = TransformDef {
+            name: Ident::new("simple"),
+            comment: None,
+            metadata: None,
+            pure: true,
+            cache: None,
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(Ident::new("y"), Expr::Field(Ident::new("x")))],
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = td.to_text();
+        assert!(!text.contains("on_error"), "Should NOT have on_error: {text}");
+        assert!(!text.contains("validate_input"), "Should NOT have validate_input: {text}");
+    }
+
+    #[test]
+    fn metadata_serialization() {
+        let td = TransformDef {
+            name: Ident::new("versioned_transform"),
+            comment: None,
+            metadata: Some(TransformMetadata {
+                version: Some("1.2.3".to_string()),
+                description: Some("Calculate account balance".to_string()),
+            }),
+            pure: true,
+            cache: None,
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(Ident::new("y"), Expr::Field(Ident::new("x")))],
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = td.to_text();
+        assert!(text.contains("version : 1.2.3"), "Should have version: {text}");
+        assert!(text.contains("description : \"Calculate account balance\""), "Should have description: {text}");
+    }
+
+    #[test]
+    fn cache_short_form_serialization() {
+        let td = TransformDef {
+            name: Ident::new("cached_transform"),
+            comment: None,
+            metadata: None,
+            pure: true,
+            cache: Some(CacheDecl {
+                ttl: Some("5 minutes".to_string()),
+                key: None,
+            }),
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(Ident::new("y"), Expr::Field(Ident::new("x")))],
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = td.to_text();
+        assert!(text.contains("cache : 5 minutes"), "Should have short-form cache: {text}");
+    }
+
+    #[test]
+    fn cache_long_form_serialization() {
+        let td = TransformDef {
+            name: Ident::new("cached_keyed"),
+            comment: None,
+            metadata: None,
+            pure: true,
+            cache: Some(CacheDecl {
+                ttl: Some("1 hours".to_string()),
+                key: Some(vec![Ident::new("account_id"), Ident::new("region")]),
+            }),
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(Ident::new("y"), Expr::Field(Ident::new("x")))],
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = td.to_text();
+        assert!(text.contains("cache"), "Should have cache block: {text}");
+        assert!(text.contains("ttl : 1 hours"), "Should have ttl: {text}");
+        assert!(text.contains("key : [account_id, region]"), "Should have key: {text}");
+    }
+
+    #[test]
+    fn use_block_serialization() {
+        let tb = TransformBlockDef {
+            name: Ident::new("composed_transform"),
+            comment: None,
+            metadata: None,
+            use_decls: Some(vec![
+                Ident::new("helper_a"),
+                Ident::new("helper_b"),
+            ]),
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            body: TransformBlockBody::Compose(ComposeBlock {
+                compose_type: ComposeType::Sequential,
+                refs: vec![
+                    ComposeRef::Simple(Ident::new("helper_a")),
+                    ComposeRef::Simple(Ident::new("helper_b")),
+                ],
+            }),
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = tb.to_text();
+        assert!(text.contains("use helper_a helper_b end"), "Should have use block: {text}");
+    }
+
+    #[test]
+    fn no_metadata_no_cache_no_use() {
+        let td = TransformDef {
+            name: Ident::new("bare"),
+            comment: None,
+            metadata: None,
+            pure: true,
+            cache: None,
+            input: IoSpec::Single(Ident::new("x"), FieldType::Integer(None)),
+            output: IoSpec::Single(Ident::new("y"), FieldType::Integer(None)),
+            apply: vec![ApplyStmt::Assign(Ident::new("y"), Expr::Field(Ident::new("x")))],
+            validate_input: None,
+            validate_output: None,
+            on_error: None,
+        };
+
+        let text = td.to_text();
+        assert!(!text.contains("version"), "Should NOT have version: {text}");
+        assert!(!text.contains("description"), "Should NOT have description: {text}");
+        assert!(!text.contains("cache"), "Should NOT have cache: {text}");
     }
 
     #[test]

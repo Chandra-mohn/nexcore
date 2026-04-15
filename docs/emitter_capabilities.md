@@ -32,11 +32,13 @@ Last updated: Session E4 (2026-03-20)
 - [DONE] REDEFINES -> comment + review note (not emitted as field)
 - [DONE] Level-88 -> enum() constraints block
 - [DONE] Traceability comments (// COBOL: original PIC)
-- [PARTIAL] Nested group objects (01/05/10 hierarchy) -- flat only, no nested `object ... end`
-- [PLANNED] Co-access grouping (uses Tier 3 ws-decomposition hints)
-- [PLANNED] Level hierarchy grouping (COBOL level structure as entity boundary)
+- [DONE] Nested group objects (01/05/10 hierarchy) -> NestedObjectDef with `object ... end`
+- [DONE] OCCURS groups -> `list<object> ... end` nested objects (is_list: true)
+- [DONE] Deep nesting (01/05/10/15+) -> recursive NestedObjectDef
+- [DONE] Co-access grouping from FileHints (paragraph_scope -> co-accessed field groups)
+- [DONE] Level hierarchy grouping (COBOL level structure drives nested object boundaries)
 
-### Tests: 20 passing
+### Tests: 27 passing
 
 ---
 
@@ -59,27 +61,46 @@ Last updated: Session E4 (2026-03-20)
 - [DONE] reads attribute -> input spec (single or multi)
 - [DONE] writes attribute -> output spec (single or multi)
 - [DONE] Type hint heuristics from field names (flag->boolean, date->date, etc.)
-- [PARTIAL] Field map built but unused (_field_map) -- could resolve PIC-based types
-- [PLANNED] Actual PIC-based type resolution from field map lookup
+- [DONE] PIC-based type resolution from DataDivision (direct path, falls back to heuristic)
+- [DONE] Field type map built from WORKING-STORAGE/LOCAL-STORAGE/LINKAGE
 
 ### Expression Extraction
-- [PARTIAL] Placeholder apply blocks with TODO comments
-- [PARTIAL] Placeholder mappings with TODO comments
-- [PLANNED] Parse `cobol_compute()` calls -> TransformDSL arithmetic expressions
-- [PLANNED] Parse `cobol_add()` / `cobol_subtract()` -> simple apply expressions
-- [PLANNED] Parse `move_numeric_literal()` -> assignment expressions
-- [PLANNED] Parse `move_alphanumeric_literal()` -> string assignment expressions
+- [DONE] cobol_add/subtract/multiply/divide -> arithmetic expressions (legacy path via expr_extract)
+- [DONE] move_alphanumeric_literal/move_numeric_literal -> assignment expressions (legacy path)
+- [DONE] COMPUTE/MOVE/ADD/SUBTRACT/MULTIPLY/DIVIDE -> real expressions (direct path via condition_extract)
+- [DONE] Expression extraction wired into legacy transform emitter apply/mappings blocks
 
-### Grammar Features Not Yet Used
-- [PLANNED] validate_input / validate_output blocks
-- [PLANNED] on_error blocks
-- [PLANNED] Metadata (version, description)
-- [PLANNED] use blocks in transform_block
-- [PLANNED] Purity detection (does function have side effects?)
-- [PLANNED] Cache hints
-- [PLANNED] Conditional compose (`when ... : ...` in compose block)
+### Purity Detection
+- [DONE] Side-effect analysis from COBOL AST (Display, Accept, Read, Write, Call, ExecSql, etc.)
+- [DONE] Pure/impure detection wired into direct transform emitter
+- [DONE] Syn-based purity detection for legacy path (scans for display/cobol_read/exec_sql calls)
+- [DONE] `pure : true/false` always emitted in TransformDSL output
 
-### Tests: 13 passing
+### on_error Blocks
+- [DONE] ErrorStatement AST types (Action, LogError, ErrorCode, Emit, Reject, Default)
+- [DONE] Serializer: on_error ... end block with action/log_error/error_code statements
+- [DONE] Extract ON SIZE ERROR from COBOL AST (ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE)
+- [DONE] Wired into direct transform emitter (SingleField and MultiField)
+
+### validate_input / validate_output Blocks
+- [DONE] ValidationRule AST types (Require, Simple) with ValidationMessage and Severity
+- [DONE] Serializer: validate_input/validate_output ... end blocks
+- [DONE] PIC-based constraint generation (unsigned numeric -> non-negative, string -> max length)
+- [DONE] Wired into direct transform emitter from DataDivision field types
+
+### Conditional Compose
+- [DONE] ComposeRef enum (Simple, When, Otherwise) replaces flat Vec<Ident>
+- [DONE] ComposeType::Conditional variant
+- [DONE] Serializer: compose conditional with when/otherwise syntax
+- [DONE] Detect EVALUATE...PERFORM pattern from COBOL AST -> conditional compose
+
+### Metadata, Use Blocks, Cache Hints
+- [DONE] TransformMetadata AST (version, description) with serializer
+- [DONE] CacheDecl AST (ttl, key) with short-form and long-form serializers
+- [DONE] use block AST (Vec<Ident>) with serializer in transform_block
+- [DONE] All fields default to None in emitters (no COBOL source maps to these)
+
+### Tests: 43 passing
 
 ---
 
@@ -99,15 +120,13 @@ Last updated: Session E4 (2026-03-20)
 - [DONE] hit_policy first_match
 - [DONE] given: block from reads (with type heuristics)
 - [DONE] decide: matrix header from reads (conditions) + writes (actions)
-- [DONE] Placeholder rows (one per match arm, capped at 10)
 - [DONE] return: block from writes
 - [DONE] Scrutinee captured in traceability comment
-- [PARTIAL] Placeholder conditions (all wildcards) -- TODO: extract match arm patterns
-- [PARTIAL] Placeholder actions (all wildcards) -- TODO: extract match arm bodies
-- [PLANNED] Extract match arm literal patterns -> exact conditions
-- [PLANNED] Extract match arm guard expressions -> comparison conditions
-- [PLANNED] Extract match arm body assignments -> action values
-- [PLANNED] Detect range patterns (e.g., 700..=799) -> range conditions
+- [DONE] Extract match arm literal patterns -> exact conditions (legacy + direct)
+- [DONE] Extract match arm body assignments -> action values (via extract_move_actions / extract_action_from_expr)
+- [DONE] Range pattern support in match arms (lo to hi syntax)
+- [DONE] Wildcard arm -> * condition
+- [DONE] Real conditions from EVALUATE WHEN values (direct path via evaluate_to_rule_shape)
 
 ### Procedural Rule Generation
 - [DONE] rule ... : ... end structure
@@ -115,25 +134,23 @@ Last updated: Session E4 (2026-03-20)
 - [DONE] Local variable declarations from reads
 - [DONE] if/elseif/else/endif skeleton matching branch count
 - [DONE] has_else tracking
-- [PARTIAL] Placeholder conditions -- TODO: extract if predicates
-- [PARTIAL] Placeholder actions (set var = 0) -- TODO: extract branch bodies
-- [PLANNED] Extract if condition expressions -> RulesDSL boolean expressions
-- [PLANNED] Extract set/let statements from branch bodies
-- [PLANNED] Detect flag-setting patterns -> add_flag() action calls
-- [PLANNED] Detect lookup patterns -> lookup() action calls
+- [DONE] Extract if condition expressions -> RulesDSL boolean expressions (both paths)
+- [DONE] Extract set/let statements from branch bodies (via extract_if_chain / extract_if_branches)
+- [DONE] Flag-setting patterns detected via MOVE action extraction
+
+### Decision Table Grammar Features
+- [DONE] description field on DecisionTable with serializer
+- [DONE] version field on DecisionTable with serializer
+- [DONE] post_calculate block (let/set statements after return block)
+- [DONE] hit_policy variants (FirstMatch, SingleHit, MultiHit, CollectAll -- AST types exist)
 
 ### Grammar Features Not Yet Used
-- [PLANNED] services block (external service declarations)
-- [PLANNED] actions block (action method declarations)
-- [PLANNED] hit_policy variants (single_hit, multi_hit, collect_all)
-- [PLANNED] post_calculate block (derived computations)
-- [PLANNED] aggregate block (for collect_all results)
-- [PLANNED] description on decision tables
-- [PLANNED] version tracking
-- [PLANNED] Priority column in decision matrix
-- [PLANNED] Collection expressions (any, all, sum, filter, etc.)
+- [PLANNED] services block (external service declarations -- no COBOL mapping)
+- [PLANNED] actions block (action method declarations -- no COBOL mapping)
+- [PLANNED] aggregate block (for collect_all results -- no COBOL mapping)
+- [PLANNED] Collection expressions (any, all, sum, filter, etc. -- no COBOL mapping)
 
-### Tests: 11 passing
+### Tests: 16 passing
 
 ---
 
@@ -158,25 +175,34 @@ Last updated: Session E4 (2026-03-20)
 ### I/O Detection
 - [DONE] Input fields detected by naming (FILE, INPUT, RECORD) -> `receive` block
 - [DONE] Output fields detected by naming (OUTPUT, PRINT, REPORT) -> `emit to` block
-- [PARTIAL] Data source configuration placeholder (TODO comments)
-- [PLANNED] Map COBOL FD entries to specific connector types (file, kafka, db)
-- [PLANNED] Map COBOL OPEN/CLOSE patterns to process lifecycle
+- [DONE] Map COBOL FD entries to connector types (Sequential->file, LineSequential->csv, Indexed->db)
+- [DONE] Map COBOL OPEN modes to I/O direction (INPUT->receive, OUTPUT->emit, I-O->both)
+- [DONE] ConnectorSpec with connector_type + config on receive/emit blocks
+- [DONE] FD-based detection preferred, falls back to name heuristic when no DataDivision
 
 ### Import References
 - [DONE] Import schema from E1
 - [DONE] Import per-section transforms from E2
 - [DONE] Import per-section rules from E3
 
-### Grammar Features Not Yet Used
-- [PLANNED] execution block (parallelism, partition, time, mode)
-- [PLANNED] state_machine declaration
-- [PLANNED] PERFORM UNTIL loops -> process loops or windowed processing
-- [PLANNED] Parallel fan-out/fan-in for independent sections
-- [PLANNED] Branch statements for conditional routing
-- [PLANNED] Metrics and resilience blocks
-- [PLANNED] Phase blocks (for EOD marker patterns)
+### Execution + Loops
+- [DONE] ExecutionBlock AST (parallelism, partition_by) with serializer
+- [DONE] LoopBlock AST from PERFORM UNTIL (condition extracted via condition_to_string)
+- [DONE] Loop wraps performed paragraph steps when PERFORM UNTIL detected
+- [DONE] mode batch always emitted for COBOL programs
 
-### Tests: 8 passing
+### Parallel + Routing
+- [DONE] ParallelBlock AST with branch serialization
+- [DONE] Independent section detection (no shared read/write fields)
+- [DONE] Automatic parallel fan-out when entry point performs independent sections
+- [DONE] RouteBlock AST with when/otherwise serialization
+
+### Grammar Features Not Yet Used
+- [PLANNED] state_machine declaration (no direct COBOL mapping)
+- [PLANNED] Metrics and resilience blocks (could map from FILE STATUS checks)
+- [PLANNED] Phase blocks (could map from EOD marker patterns)
+
+### Tests: 15 passing
 
 ---
 
@@ -207,22 +233,20 @@ Last updated: Session E4 (2026-03-20)
 ## Cross-Cutting Enhancements (apply to multiple emitters)
 
 ### Expression Extraction Engine
-- [PLANNED] Parse Rust function bodies for cobol_*() call patterns
-- [PLANNED] Map cobol_compute() -> arithmetic expressions
-- [PLANNED] Map cobol_add/subtract/multiply/divide -> simple expressions
-- [PLANNED] Map move_*_literal() -> assignments
-- [PLANNED] Map match arms -> condition/action pairs
-- [PLANNED] Map if predicates -> boolean expressions
-- Applies to: E2 (apply/mappings), E3 (conditions/actions)
+- [DONE] Parse Rust function bodies for cobol_*() call patterns (expr_extract.rs)
+- [DONE] Map cobol_compute() -> arithmetic expressions
+- [DONE] Map cobol_add/subtract/multiply/divide -> simple expressions
+- [DONE] Map move_*_literal() -> assignments
+- [DONE] Map match arms -> condition/action pairs (extract_match_branches)
+- [DONE] Map if predicates -> boolean expressions (extract_if_chain / extract_if_branches)
+- [DONE] COBOL AST direct extraction for all arithmetic verbs (condition_extract.rs)
 
 ### Tier 3 Assessment Integration
-- [PLANNED] Use ws-decomposition for better entity grouping (E1)
+- [DONE] Use ws-decomposition for better entity grouping (E1 -- co-access grouping from FileHints)
 - [PLANNED] Use dispatcher-analysis for process flow detection (E4)
 - [PLANNED] Use call graph for compose block ordering (E2)
-- Applies to: E1, E2, E4
 
 ### FileHints Integration
-- [PLANNED] Use FieldHint.paragraph_scope for better field -> rule mapping
-- [PLANNED] Use ParagraphHint.local_only_fields for input/output refinement
-- [PLANNED] Use level_88_groups for enum constraint enrichment
-- Applies to: E1, E2, E3
+- [DONE] Use FieldHint.paragraph_scope for co-access schema grouping (E1)
+- [PLANNED] Use ParagraphHint.local_only_fields for input/output refinement (E2)
+- [PLANNED] Use level_88_groups for enum constraint enrichment (E1)

@@ -5,7 +5,7 @@
 
 use cobol_transpiler::ast::{ConditionValue, DataEntry, Literal, Usage};
 
-use crate::dsl::dsl_ast::{FieldDecl, FieldType, Ident, SchemaConstraint};
+use crate::dsl::dsl_ast::{FieldDecl, FieldType, Ident, NestedObjectDef, SchemaConstraint};
 use crate::dsl::type_mapping::{pic_to_nexflow_type, NexflowType};
 
 use super::cobol_extract::cobol_name_to_snake;
@@ -96,6 +96,68 @@ pub fn flatten_children(
             flatten_children(&child.children, fields, constraints);
         }
     }
+}
+
+/// Build nested objects from a DataEntry's children, respecting COBOL level hierarchy.
+///
+/// Elementary children (have PIC) become FieldDecls.
+/// Group children (no PIC, have structural children) become NestedObjectDef.
+/// OCCURS groups become `is_list: true` nested objects.
+/// REDEFINES and FILLER entries are skipped.
+pub fn build_nested_objects(
+    children: &[DataEntry],
+) -> (Vec<FieldDecl>, Vec<SchemaConstraint>, Vec<NestedObjectDef>) {
+    let mut fields = Vec::new();
+    let mut constraints = Vec::new();
+    let mut nested = Vec::new();
+
+    for child in children {
+        if is_filler(&child.name) || child.level == 66 || child.level == 88 {
+            continue;
+        }
+
+        // Skip REDEFINES -- handled by schema_redefines.rs
+        if child.redefines.is_some() {
+            continue;
+        }
+
+        if !has_structural_children(child) {
+            // Elementary field (or group with only 88/66 children)
+            if let Some(field) = entry_to_field_decl(child) {
+                fields.push(field);
+            }
+            let l88 = collect_level88(child);
+            if !l88.is_empty() {
+                let field_name = cobol_name_to_snake(&child.name);
+                constraints.push(SchemaConstraint::Enum(Ident::new(&field_name), l88));
+            }
+        } else {
+            // Group with structural children -> NestedObjectDef
+            let (child_fields, child_constraints, child_nested) =
+                build_nested_objects(&child.children);
+
+            // Merge child constraints into parent constraints
+            constraints.extend(child_constraints);
+
+            let is_list = child.occurs.is_some();
+            let snake_name = cobol_name_to_snake(&child.name);
+            // Strip common ws_ prefix for cleaner nested object names
+            let clean_name = snake_name
+                .strip_prefix("ws_")
+                .unwrap_or(&snake_name)
+                .to_string();
+
+            nested.push(NestedObjectDef {
+                name: Ident::new(&clean_name),
+                is_list,
+                fields: child_fields,
+                nested: child_nested,
+                comment: Some(format!("COBOL group: {}", child.name)),
+            });
+        }
+    }
+
+    (fields, constraints, nested)
 }
 
 /// Collect level-88 condition values from an entry's children.
@@ -228,5 +290,100 @@ mod tests {
         let field = entry_to_field_decl(&make_entry("WS-BALANCE", "S9(9)V99")).unwrap();
         assert_eq!(field.name.as_str(), "ws_balance");
         assert!(matches!(field.field_type, FieldType::Decimal(_, _)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Nested object tests
+    // -----------------------------------------------------------------------
+
+    fn make_group(name: &str, children: Vec<DataEntry>) -> DataEntry {
+        DataEntry {
+            level: 5,
+            name: name.to_string(),
+            pic: None,
+            usage: Usage::Display,
+            value: None,
+            redefines: None,
+            occurs: None,
+            occurs_depending: None,
+            sign: None,
+            justified_right: false,
+            blank_when_zero: false,
+            children,
+            condition_values: vec![],
+            byte_offset: None,
+            byte_length: None,
+            renames_target: None,
+            renames_thru: None,
+            index_names: vec![],
+        }
+    }
+
+    #[test]
+    fn nested_group_becomes_nested_object() {
+        let children = vec![
+            make_entry("WS-ID", "X(10)"),
+            make_group("WS-ADDRESS", vec![
+                make_entry("WS-STREET", "X(50)"),
+                make_entry("WS-CITY", "X(30)"),
+            ]),
+        ];
+
+        let (fields, _, nested) = build_nested_objects(&children);
+        assert_eq!(fields.len(), 1, "Should have 1 elementary field");
+        assert_eq!(fields[0].name.as_str(), "ws_id");
+        assert_eq!(nested.len(), 1, "Should have 1 nested object");
+        assert_eq!(nested[0].name.as_str(), "address");
+        assert!(!nested[0].is_list);
+        assert_eq!(nested[0].fields.len(), 2);
+    }
+
+    #[test]
+    fn occurs_group_becomes_list_nested_object() {
+        let mut group = make_group("WS-PHONES", vec![
+            make_entry("WS-PHONE-NUM", "X(15)"),
+            make_entry("WS-PHONE-TYPE", "X(1)"),
+        ]);
+        group.occurs = Some(5);
+
+        let children = vec![group];
+        let (fields, _, nested) = build_nested_objects(&children);
+        assert!(fields.is_empty());
+        assert_eq!(nested.len(), 1);
+        assert!(nested[0].is_list, "OCCURS group should be is_list");
+        assert_eq!(nested[0].fields.len(), 2);
+    }
+
+    #[test]
+    fn no_sub_groups_no_nested_objects() {
+        let children = vec![
+            make_entry("WS-A", "X(10)"),
+            make_entry("WS-B", "9(5)"),
+        ];
+
+        let (fields, _, nested) = build_nested_objects(&children);
+        assert_eq!(fields.len(), 2);
+        assert!(nested.is_empty());
+    }
+
+    #[test]
+    fn deep_nesting_recursive() {
+        let children = vec![
+            make_group("WS-OUTER", vec![
+                make_entry("WS-OUTER-ID", "X(5)"),
+                make_group("WS-INNER", vec![
+                    make_entry("WS-INNER-VAL", "9(3)"),
+                ]),
+            ]),
+        ];
+
+        let (fields, _, nested) = build_nested_objects(&children);
+        assert!(fields.is_empty(), "No top-level elementary fields");
+        assert_eq!(nested.len(), 1, "One top-level nested object");
+        assert_eq!(nested[0].name.as_str(), "outer");
+        assert_eq!(nested[0].fields.len(), 1, "One elementary in outer");
+        assert_eq!(nested[0].nested.len(), 1, "One nested in outer");
+        assert_eq!(nested[0].nested[0].name.as_str(), "inner");
+        assert_eq!(nested[0].nested[0].fields.len(), 1);
     }
 }

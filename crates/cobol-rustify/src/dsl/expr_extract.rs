@@ -129,6 +129,18 @@ pub fn extract_action_from_expr(expr: &syn::Expr) -> Option<(String, String)> {
                         None
                     }
                 }
+                "cobol_add" | "cobol_add_giving" => {
+                    extract_arithmetic_verb("+", &call.args)
+                }
+                "cobol_subtract" | "cobol_subtract_giving" => {
+                    extract_arithmetic_verb("-", &call.args)
+                }
+                "cobol_multiply" | "cobol_multiply_giving" => {
+                    extract_arithmetic_verb("*", &call.args)
+                }
+                "cobol_divide_into" | "cobol_divide_giving" => {
+                    extract_arithmetic_verb("/", &call.args)
+                }
                 _ => None,
             }
         }
@@ -175,6 +187,66 @@ pub fn extract_if_chain(if_expr: &syn::ExprIf) -> Vec<(String, Vec<(String, Stri
     }
 
     branches
+}
+
+// ---------------------------------------------------------------------------
+// Purity detection (legacy path)
+// ---------------------------------------------------------------------------
+
+/// Check whether a syn::Block contains calls that indicate side effects.
+/// Looks for transpiler-generated functions like `display`, `cobol_read`,
+/// `cobol_write`, `open_file`, `close_file`, `exec_sql`, `cobol_call`, etc.
+pub fn block_has_side_effects(block: &syn::Block) -> bool {
+    block.stmts.iter().any(|stmt| syn_stmt_has_side_effects(stmt))
+}
+
+fn syn_stmt_has_side_effects(stmt: &syn::Stmt) -> bool {
+    match stmt {
+        syn::Stmt::Expr(expr, _) => syn_expr_has_side_effects(expr),
+        syn::Stmt::Local(local) => local
+            .init
+            .as_ref()
+            .is_some_and(|init| syn_expr_has_side_effects(&init.expr)),
+        _ => false,
+    }
+}
+
+fn syn_expr_has_side_effects(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Call(call) => {
+            if let Some(name) = call_func_name(call) {
+                matches!(
+                    name.as_str(),
+                    "display"
+                        | "accept_input"
+                        | "open_file"
+                        | "close_file"
+                        | "cobol_read"
+                        | "cobol_write"
+                        | "cobol_rewrite"
+                        | "cobol_delete"
+                        | "cobol_start"
+                        | "exec_sql"
+                        | "execute_sql"
+                        | "cobol_call"
+                        | "call_program"
+                        | "cobol_sort"
+                        | "cobol_merge"
+                )
+            } else {
+                false
+            }
+        }
+        syn::Expr::If(if_expr) => {
+            block_has_side_effects(&if_expr.then_branch)
+                || if_expr
+                    .else_branch
+                    .as_ref()
+                    .is_some_and(|(_, e)| syn_expr_has_side_effects(e))
+        }
+        syn::Expr::Block(b) => block_has_side_effects(&b.block),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +386,21 @@ fn extract_mut_field_name(expr: &syn::Expr) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Extract a (field, expression) pair from cobol_add/subtract/multiply/divide patterns.
+/// Pattern: cobol_add(&ws.src, &mut ws.dest, ...) -> (dest, "dest + src")
+/// The operator is applied as `dest OP src` (in-place mutation semantics).
+fn extract_arithmetic_verb(
+    op: &str,
+    args: &syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>,
+) -> Option<(String, String)> {
+    if args.len() < 2 {
+        return None;
+    }
+    let src = extract_mut_field_name(&args[0])?;
+    let dest = extract_mut_field_name(&args[1])?;
+    Some((dest.clone(), format!("{dest} {op} {src}")))
 }
 
 /// Get the function name from a call expression.
@@ -491,5 +578,80 @@ mod tests {
         assert!(branches[1].0.contains("ws_grade") && branches[1].0.contains("\"B\""));
         assert!(branches[2].0.contains("ws_grade") && branches[2].0.contains("\"C\""));
         assert_eq!(branches[3].0, "otherwise");
+    }
+
+    // -----------------------------------------------------------------------
+    // Arithmetic verb extraction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_cobol_add_action() {
+        let code = r#"cobol_add(&ws.ws_amount, &mut ws.ws_total, None, &ctx.config)"#;
+        let expr = syn::parse_str::<syn::Expr>(code).unwrap();
+        let result = extract_action_from_expr(&expr);
+        assert_eq!(
+            result,
+            Some(("ws_total".to_string(), "ws_total + ws_amount".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_cobol_subtract_action() {
+        let code =
+            r#"cobol_subtract(&ws.ws_deduction, &mut ws.ws_balance, None, &ctx.config)"#;
+        let expr = syn::parse_str::<syn::Expr>(code).unwrap();
+        let result = extract_action_from_expr(&expr);
+        assert_eq!(
+            result,
+            Some(("ws_balance".to_string(), "ws_balance - ws_deduction".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_cobol_multiply_action() {
+        let code = r#"cobol_multiply(&ws.ws_rate, &mut ws.ws_amount, None, &ctx.config)"#;
+        let expr = syn::parse_str::<syn::Expr>(code).unwrap();
+        let result = extract_action_from_expr(&expr);
+        assert_eq!(
+            result,
+            Some(("ws_amount".to_string(), "ws_amount * ws_rate".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_cobol_divide_action() {
+        let code =
+            r#"cobol_divide_into(&ws.ws_divisor, &mut ws.ws_result, None, &ctx.config)"#;
+        let expr = syn::parse_str::<syn::Expr>(code).unwrap();
+        let result = extract_action_from_expr(&expr);
+        assert_eq!(
+            result,
+            Some(("ws_result".to_string(), "ws_result / ws_divisor".to_string()))
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy purity detection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn syn_pure_block() {
+        let code = r#"{ cobol_add(&ws.ws_a, &mut ws.ws_b, None, &ctx.config); }"#;
+        let block = syn::parse_str::<syn::Block>(code).unwrap();
+        assert!(!block_has_side_effects(&block));
+    }
+
+    #[test]
+    fn syn_impure_display() {
+        let code = r#"{ display(&ws.ws_msg, &ctx.config); }"#;
+        let block = syn::parse_str::<syn::Block>(code).unwrap();
+        assert!(block_has_side_effects(&block));
+    }
+
+    #[test]
+    fn syn_impure_exec_sql() {
+        let code = r#"{ exec_sql(&mut ws, &ctx); }"#;
+        let block = syn::parse_str::<syn::Block>(code).unwrap();
+        assert!(block_has_side_effects(&block));
     }
 }

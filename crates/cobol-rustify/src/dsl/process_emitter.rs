@@ -82,6 +82,8 @@ pub struct CallNode {
     pub writes: Vec<String>,
     /// What role this node plays
     pub role: NodeRole,
+    /// PERFORM UNTIL condition (if this node has a loop pattern)
+    pub loop_condition: Option<String>,
 }
 
 /// Classification of a node's role in the process.
@@ -108,6 +110,25 @@ pub struct CallGraph {
     pub sections: Vec<String>,
     /// Which sections contain which paragraphs (section nexflow name -> para nexflow names)
     pub section_members: HashMap<String, Vec<String>>,
+    /// File I/O info from COBOL FD entries (connector type + config).
+    /// Populated by direct emitter when DataDivision is available.
+    pub file_io: Vec<FileIoEntry>,
+}
+
+/// A file I/O entry derived from COBOL FILE SECTION FD.
+#[derive(Debug, Clone)]
+pub struct FileIoEntry {
+    pub file_name: String,
+    pub direction: IoDirection,
+    pub connector: crate::dsl::dsl_ast::ConnectorSpec,
+    pub record_schema: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoDirection {
+    Input,
+    Output,
+    InputOutput,
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +199,7 @@ fn build_call_graph(fns: &[AnnotatedFn]) -> CallGraph {
             reads: attr.reads.clone(),
             writes: attr.writes.clone(),
             role,
+            loop_condition: None,
         });
     }
 
@@ -197,6 +219,7 @@ fn build_call_graph(fns: &[AnnotatedFn]) -> CallGraph {
         entry_point,
         sections: sections_seen,
         section_members,
+        file_io: vec![],
     }
 }
 
@@ -225,12 +248,27 @@ pub fn generate_process_file(
     // Build process body statements
     let mut body = Vec::new();
 
-    // Receive block (if any reads detected)
-    if !io_info.input_fields.is_empty() {
-        body.push(ProcessStmt::Comment("Input data sources (from COBOL file reads)".to_string()));
+    // Receive blocks from FD entries or heuristic I/O detection
+    let input_fds: Vec<&FileIoEntry> = graph.file_io.iter()
+        .filter(|f| f.direction == IoDirection::Input || f.direction == IoDirection::InputOutput)
+        .collect();
+
+    if !input_fds.is_empty() {
+        body.push(ProcessStmt::Comment("Input data sources (from COBOL FILE SECTION)".to_string()));
+        for fd in &input_fds {
+            let name = sanitize_identifier(&fd.file_name.to_lowercase());
+            body.push(ProcessStmt::Receive(ReceiveBlock {
+                name: Ident::new(&name),
+                schema: fd.record_schema.as_ref().map(|s| Ident::new(s)),
+                connector: Some(fd.connector.clone()),
+            }));
+        }
+    } else if !io_info.input_fields.is_empty() {
+        body.push(ProcessStmt::Comment("Input data sources (from COBOL field name heuristic)".to_string()));
         body.push(ProcessStmt::Receive(ReceiveBlock {
             name: Ident::new("input_records"),
             schema: Some(Ident::new(&format!("{proc_name}_input"))),
+            connector: None,
         }));
         notes.push("Input receive block needs data source configuration".to_string());
     }
@@ -257,12 +295,27 @@ pub fn generate_process_file(
         notes.push("No entry point detected -- sections listed in declaration order".to_string());
     }
 
-    // Emit block (if any writes detected)
-    if !io_info.output_fields.is_empty() {
-        body.push(ProcessStmt::Comment("Output data sinks (from COBOL file writes)".to_string()));
+    // Emit blocks from FD entries or heuristic I/O detection
+    let output_fds: Vec<&FileIoEntry> = graph.file_io.iter()
+        .filter(|f| f.direction == IoDirection::Output || f.direction == IoDirection::InputOutput)
+        .collect();
+
+    if !output_fds.is_empty() {
+        body.push(ProcessStmt::Comment("Output data sinks (from COBOL FILE SECTION)".to_string()));
+        for fd in &output_fds {
+            let name = sanitize_identifier(&fd.file_name.to_lowercase());
+            body.push(ProcessStmt::Emit(EmitBlock {
+                target: Ident::new(&name),
+                schema: fd.record_schema.as_ref().map(|s| Ident::new(s)),
+                connector: Some(fd.connector.clone()),
+            }));
+        }
+    } else if !io_info.output_fields.is_empty() {
+        body.push(ProcessStmt::Comment("Output data sinks (from COBOL field name heuristic)".to_string()));
         body.push(ProcessStmt::Emit(EmitBlock {
             target: Ident::new("output_records"),
             schema: Some(Ident::new(&format!("{proc_name}_output"))),
+            connector: None,
         }));
         notes.push("Output emit block needs data sink configuration".to_string());
     }
@@ -276,12 +329,71 @@ pub fn generate_process_file(
         processes: vec![ProcessDef {
             name: Ident::new(&proc_name),
             mode: Some(ProcessMode::Batch),
+            execution: None,
             body,
         }],
     };
 
     // Confidence is 1.0 -- output is grammar-valid by construction
     (file.to_text(), notes, 1.0)
+}
+
+/// Check if a set of performed sections are independent (no shared read/write fields).
+/// Two sections are independent if no field is read by one and written by the other.
+fn are_sections_independent(graph: &CallGraph, section_names: &[String]) -> bool {
+    if section_names.len() < 2 {
+        return false;
+    }
+
+    // Collect reads and writes for each section (including its children)
+    let mut section_fields: Vec<(HashSet<String>, HashSet<String>)> = Vec::new();
+
+    for sec_name in section_names {
+        let mut reads = HashSet::new();
+        let mut writes = HashSet::new();
+        collect_section_fields(graph, sec_name, &mut reads, &mut writes, &mut HashSet::new());
+        section_fields.push((reads, writes));
+    }
+
+    // Check pairwise independence
+    for i in 0..section_fields.len() {
+        for j in (i + 1)..section_fields.len() {
+            let (reads_i, writes_i) = &section_fields[i];
+            let (reads_j, writes_j) = &section_fields[j];
+
+            // Conflict if one reads what the other writes
+            if !reads_i.is_disjoint(writes_j) || !reads_j.is_disjoint(writes_i) {
+                return false;
+            }
+            // Conflict if both write the same field
+            if !writes_i.is_disjoint(writes_j) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// Recursively collect all reads and writes for a section and its children.
+fn collect_section_fields(
+    graph: &CallGraph,
+    node_name: &str,
+    reads: &mut HashSet<String>,
+    writes: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+) {
+    if !visited.insert(node_name.to_string()) {
+        return;
+    }
+    if let Some(node) = graph.nodes.iter().find(|n| n.nexflow_name == node_name) {
+        reads.extend(node.reads.iter().cloned());
+        writes.extend(node.writes.iter().cloned());
+        for perf in &node.performs {
+            let perf_name = sanitize_identifier(&perf.to_lowercase().replace('-', "_"));
+            collect_section_fields(graph, &perf_name, reads, writes, visited);
+        }
+    }
 }
 
 /// Walk the call graph and collect process statements into a Vec.
@@ -316,9 +428,26 @@ fn collect_steps(
         NodeRole::EntryPoint => {
             // Entry point: walk its performs
             body.push(ProcessStmt::Comment(format!("Entry: {}", node.cobol_name)));
-            for perf in &node.performs {
-                let perf_name = sanitize_identifier(&perf.to_lowercase().replace('-', "_"));
-                collect_steps(body, graph, &perf_name, notes, visited);
+
+            // Check if performed sections are independent (no shared fields)
+            let perf_names: Vec<String> = node.performs.iter()
+                .map(|p| sanitize_identifier(&p.to_lowercase().replace('-', "_")))
+                .collect();
+
+            if perf_names.len() >= 2 && are_sections_independent(graph, &perf_names) {
+                // Independent sections -> parallel fan-out
+                let mut branches = Vec::new();
+                for perf_name in &perf_names {
+                    let mut branch_body = Vec::new();
+                    collect_steps(&mut branch_body, graph, perf_name, notes, visited);
+                    branches.push((Ident::new(perf_name), branch_body));
+                }
+                body.push(ProcessStmt::Parallel(ParallelBlock { branches }));
+            } else {
+                // Sequential execution
+                for perf_name in &perf_names {
+                    collect_steps(body, graph, perf_name, notes, visited);
+                }
             }
         }
         NodeRole::SectionDispatcher => {
@@ -346,17 +475,48 @@ fn collect_steps(
                 node.cobol_name, reads_str, writes_str,
             )));
 
-            // Emit as transform step referencing E2
-            body.push(ProcessStmt::TransformUsing {
-                input: Ident::new("input_records"),
-                using: Ident::new(&node.nexflow_name),
-                output: Ident::new("output_records"),
-            });
+            // Check for PERFORM UNTIL loop pattern
+            if let Some(condition) = &node.loop_condition {
+                // Wrap performed steps in a loop block
+                let mut loop_body = Vec::new();
+                loop_body.push(ProcessStmt::TransformUsing {
+                    input: Ident::new("input_records"),
+                    using: Ident::new(&node.nexflow_name),
+                    output: Ident::new("output_records"),
+                });
+                for perf in &node.performs {
+                    let perf_name = sanitize_identifier(&perf.to_lowercase().replace('-', "_"));
+                    collect_steps(&mut loop_body, graph, &perf_name, notes, visited);
+                }
+                body.push(ProcessStmt::Loop(LoopBlock {
+                    condition: Some(condition.clone()),
+                    body: loop_body,
+                }));
+            } else {
+                // No loop -- emit as regular transform + check for parallel
+                body.push(ProcessStmt::TransformUsing {
+                    input: Ident::new("input_records"),
+                    using: Ident::new(&node.nexflow_name),
+                    output: Ident::new("output_records"),
+                });
 
-            // Then recurse into performs
-            for perf in &node.performs {
-                let perf_name = sanitize_identifier(&perf.to_lowercase().replace('-', "_"));
-                collect_steps(body, graph, &perf_name, notes, visited);
+                let perf_names: Vec<String> = node.performs.iter()
+                    .map(|p| sanitize_identifier(&p.to_lowercase().replace('-', "_")))
+                    .collect();
+
+                if perf_names.len() >= 2 && are_sections_independent(graph, &perf_names) {
+                    let mut branches = Vec::new();
+                    for pn in &perf_names {
+                        let mut branch_body = Vec::new();
+                        collect_steps(&mut branch_body, graph, pn, notes, visited);
+                        branches.push((Ident::new(pn), branch_body));
+                    }
+                    body.push(ProcessStmt::Parallel(ParallelBlock { branches }));
+                } else {
+                    for pn in &perf_names {
+                        collect_steps(body, graph, pn, notes, visited);
+                    }
+                }
             }
         }
         NodeRole::Leaf => {

@@ -445,6 +445,76 @@ pub fn is_tabular_condition(cond: &Condition) -> bool {
     }
 }
 
+/// Detect EVALUATE...PERFORM patterns and produce a conditional compose block.
+///
+/// Returns Some(ComposeBlock) when all WHEN branches contain exactly one PERFORM
+/// statement, making it suitable for conditional compose. Returns None otherwise.
+pub fn evaluate_to_conditional_compose(
+    eval: &EvaluateStatement,
+) -> Option<crate::dsl::dsl_ast::ComposeBlock> {
+    use crate::dsl::dsl_ast::{ComposeBlock, ComposeRef, ComposeType, Expr, Ident};
+
+    let mut refs = Vec::new();
+
+    // Build the subject expression string for conditions
+    let subject = if eval.subjects.len() == 1 {
+        match &eval.subjects[0] {
+            EvaluateSubject::Expr(op) => operand_to_string(op),
+            EvaluateSubject::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        }
+    } else {
+        return None; // Multi-subject EVALUATE not supported for compose
+    };
+
+    for branch in &eval.when_branches {
+        // Each branch must have exactly one PERFORM
+        if branch.body.len() != 1 {
+            return None;
+        }
+        let target = match &branch.body[0] {
+            Statement::Perform(perf) => {
+                perf.target.as_ref()?.name.clone()
+            }
+            _ => return None,
+        };
+
+        // Build the condition from WHEN values
+        let condition = branch
+            .values
+            .iter()
+            .map(when_value_to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let snake_target = target.to_lowercase().replace('-', "_");
+        refs.push(ComposeRef::When(
+            Expr::Raw(format!("{subject} == {condition}")),
+            Ident::new(&snake_target),
+        ));
+    }
+
+    // WHEN OTHER -> otherwise
+    if !eval.when_other.is_empty() {
+        if eval.when_other.len() == 1 {
+            if let Statement::Perform(perf) = &eval.when_other[0] {
+                if let Some(target) = &perf.target {
+                    let snake = target.name.to_lowercase().replace('-', "_");
+                    refs.push(ComposeRef::Otherwise(Ident::new(&snake)));
+                }
+            }
+        }
+    }
+
+    if refs.is_empty() {
+        return None;
+    }
+
+    Some(ComposeBlock {
+        compose_type: ComposeType::Conditional,
+        refs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

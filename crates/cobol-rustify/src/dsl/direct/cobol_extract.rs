@@ -21,7 +21,7 @@ pub fn cobol_name_to_snake(name: &str) -> String {
 }
 
 /// Convert a COBOL Usage enum to the string form expected by `pic_to_nexflow_type`.
-fn usage_to_str(usage: &Usage) -> Option<&'static str> {
+pub fn usage_to_str(usage: &Usage) -> Option<&'static str> {
     match usage {
         Usage::Display => None,
         Usage::Comp => Some("comp"),
@@ -389,6 +389,103 @@ pub fn collect_condition_reads(cond: &Condition, reads: &mut HashSet<String>) {
     }
 }
 
+/// Check whether any statement in the list has side effects (I/O, external calls, SQL).
+///
+/// Side-effect statements: Display, Accept, Open, Close, Read, Write, Rewrite,
+/// Delete, Start (file I/O), Call (external program), ExecSql (database),
+/// Sort, Merge (sort I/O). Recursively checks If, Evaluate, Perform bodies.
+pub fn has_side_effects(stmts: &[Statement]) -> bool {
+    stmts.iter().any(stmt_has_side_effects)
+}
+
+fn stmt_has_side_effects(stmt: &Statement) -> bool {
+    match stmt {
+        // Console I/O
+        Statement::Display(_) | Statement::Accept(_) => true,
+
+        // File I/O
+        Statement::Open(_)
+        | Statement::Close(_)
+        | Statement::Read(_)
+        | Statement::Write(_)
+        | Statement::Rewrite(_)
+        | Statement::Delete(_)
+        | Statement::Start(_) => true,
+
+        // External program
+        Statement::Call(_) => true,
+
+        // Embedded SQL
+        Statement::ExecSql(_) => true,
+
+        // Sort/Merge (file I/O)
+        Statement::Sort(_) | Statement::Merge(_) => true,
+
+        // Control flow: recurse into bodies
+        Statement::If(if_stmt) => {
+            has_side_effects(&if_stmt.then_body) || has_side_effects(&if_stmt.else_body)
+        }
+        Statement::Evaluate(eval) => {
+            eval.when_branches
+                .iter()
+                .any(|b| has_side_effects(&b.body))
+                || has_side_effects(&eval.when_other)
+        }
+        Statement::Perform(perf) => has_side_effects(&perf.body),
+
+        // Pure computation statements
+        _ => false,
+    }
+}
+
+/// Extract ON SIZE ERROR handlers from arithmetic statements.
+///
+/// Walks statements and collects error handling info from ADD, SUBTRACT,
+/// MULTIPLY, DIVIDE, COMPUTE that have non-empty `on_size_error` bodies.
+/// Returns None if no error handlers are found.
+pub fn extract_on_size_error(stmts: &[Statement]) -> Option<Vec<crate::dsl::dsl_ast::ErrorStatement>> {
+    use crate::dsl::dsl_ast::{ErrorAction, ErrorStatement};
+
+    let mut errors = Vec::new();
+
+    for stmt in stmts {
+        let (verb, has_handler) = match stmt {
+            Statement::Add(s) => ("ADD", !s.on_size_error.is_empty()),
+            Statement::Subtract(s) => ("SUBTRACT", !s.on_size_error.is_empty()),
+            Statement::Multiply(s) => ("MULTIPLY", !s.on_size_error.is_empty()),
+            Statement::Divide(s) => ("DIVIDE", !s.on_size_error.is_empty()),
+            Statement::Compute(s) => ("COMPUTE", !s.on_size_error.is_empty()),
+            Statement::If(if_stmt) => {
+                // Recurse into if/else bodies
+                if let Some(inner) = extract_on_size_error(&if_stmt.then_body) {
+                    errors.extend(inner);
+                }
+                if let Some(inner) = extract_on_size_error(&if_stmt.else_body) {
+                    errors.extend(inner);
+                }
+                continue;
+            }
+            Statement::Perform(perf) => {
+                if let Some(inner) = extract_on_size_error(&perf.body) {
+                    errors.extend(inner);
+                }
+                continue;
+            }
+            _ => continue,
+        };
+
+        if has_handler {
+            errors.push(ErrorStatement::Action(ErrorAction::Raise));
+            errors.push(ErrorStatement::LogError(format!(
+                "ON SIZE ERROR in {verb} statement"
+            )));
+            errors.push(ErrorStatement::ErrorCode("SIZE_ERROR".to_string()));
+        }
+    }
+
+    if errors.is_empty() { None } else { Some(errors) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +508,174 @@ mod tests {
         assert_eq!(usage_to_str(&Usage::Display), None);
         assert_eq!(usage_to_str(&Usage::Comp3), Some("comp3"));
         assert_eq!(usage_to_str(&Usage::Comp), Some("comp"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Purity / side-effect detection tests
+    // -----------------------------------------------------------------------
+
+    use cobol_transpiler::ast::{
+        AcceptSource, AcceptStatement, ArithOp, ArithTarget, CallStatement, ComputeStatement,
+        DataReference, DisplayStatement, DisplayTarget, ExecSqlStatement, IfStatement,
+        MoveStatement, ReadStatement, SqlStatementType,
+    };
+
+    fn make_data_ref(name: &str) -> DataReference {
+        DataReference {
+            name: name.to_string(),
+            qualifiers: vec![],
+            subscripts: vec![],
+            ref_mod: None,
+        }
+    }
+
+    #[test]
+    fn pure_move_compute() {
+        let stmts = vec![
+            Statement::Move(MoveStatement {
+                corresponding: false,
+                source: Operand::DataRef(make_data_ref("WS-A")),
+                destinations: vec![make_data_ref("WS-B")],
+            }),
+            Statement::Compute(ComputeStatement {
+                targets: vec![ArithTarget {
+                    field: make_data_ref("WS-C"),
+                    rounded: false,
+                }],
+                expression: ArithExpr::BinaryOp {
+                    left: Box::new(ArithExpr::Operand(Operand::DataRef(make_data_ref("WS-A")))),
+                    op: ArithOp::Add,
+                    right: Box::new(ArithExpr::Operand(Operand::DataRef(make_data_ref("WS-B")))),
+                },
+                on_size_error: vec![],
+                not_on_size_error: vec![],
+            }),
+        ];
+        assert!(!has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn impure_display() {
+        let stmts = vec![Statement::Display(DisplayStatement {
+            items: vec![],
+            upon: DisplayTarget::Sysout,
+            no_advancing: false,
+        })];
+        assert!(has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn impure_accept() {
+        let stmts = vec![Statement::Accept(AcceptStatement {
+            target: make_data_ref("WS-INPUT"),
+            from: AcceptSource::Sysin,
+        })];
+        assert!(has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn impure_read() {
+        let stmts = vec![Statement::Read(ReadStatement {
+            file_name: "INFILE".to_string(),
+            into: None,
+            key: None,
+            at_end: vec![],
+            not_at_end: vec![],
+            invalid_key: vec![],
+            not_invalid_key: vec![],
+        })];
+        assert!(has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn impure_call() {
+        let stmts = vec![Statement::Call(CallStatement {
+            program: Operand::Literal(Literal::Alphanumeric("SUBPROG".to_string())),
+            using: vec![],
+            returning: None,
+            on_exception: vec![],
+            not_on_exception: vec![],
+        })];
+        assert!(has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn impure_exec_sql() {
+        let stmts = vec![Statement::ExecSql(ExecSqlStatement {
+            sql_type: SqlStatementType::SelectInto,
+            raw_sql: "SELECT 1".to_string(),
+            input_vars: vec![],
+            output_vars: vec![],
+            cursor_name: None,
+            prepared_name: None,
+        })];
+        assert!(has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn impure_nested_in_if() {
+        let stmts = vec![Statement::If(IfStatement {
+            condition: Condition::ConditionName(make_data_ref("WS-FLAG")),
+            then_body: vec![Statement::Display(DisplayStatement {
+                items: vec![],
+                upon: DisplayTarget::Sysout,
+                no_advancing: false,
+            })],
+            else_body: vec![],
+        })];
+        assert!(has_side_effects(&stmts));
+    }
+
+    #[test]
+    fn pure_if_no_side_effects() {
+        let stmts = vec![Statement::If(IfStatement {
+            condition: Condition::ConditionName(make_data_ref("WS-FLAG")),
+            then_body: vec![Statement::Move(MoveStatement {
+                corresponding: false,
+                source: Operand::DataRef(make_data_ref("WS-A")),
+                destinations: vec![make_data_ref("WS-B")],
+            })],
+            else_body: vec![],
+        })];
+        assert!(!has_side_effects(&stmts));
+    }
+
+    // -----------------------------------------------------------------------
+    // ON SIZE ERROR extraction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_on_size_error_from_compute() {
+        let stmts = vec![Statement::Compute(ComputeStatement {
+            targets: vec![ArithTarget {
+                field: make_data_ref("WS-RESULT"),
+                rounded: false,
+            }],
+            expression: ArithExpr::Operand(Operand::DataRef(make_data_ref("WS-A"))),
+            on_size_error: vec![Statement::Display(DisplayStatement {
+                items: vec![],
+                upon: DisplayTarget::Sysout,
+                no_advancing: false,
+            })],
+            not_on_size_error: vec![],
+        })];
+        let result = extract_on_size_error(&stmts);
+        assert!(result.is_some(), "Should extract on_size_error");
+        let errors = result.unwrap();
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn no_on_size_error_returns_none() {
+        let stmts = vec![Statement::Compute(ComputeStatement {
+            targets: vec![ArithTarget {
+                field: make_data_ref("WS-RESULT"),
+                rounded: false,
+            }],
+            expression: ArithExpr::Operand(Operand::DataRef(make_data_ref("WS-A"))),
+            on_size_error: vec![],
+            not_on_size_error: vec![],
+        })];
+        assert!(extract_on_size_error(&stmts).is_none());
     }
 }
