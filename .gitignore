@@ -20,7 +20,7 @@ tools/*.jar
 # ANTLR4 generated parser code (regenerate from .g4 grammars)
 # These are 130K+ lines of machine-generated Rust -- not hand-maintained.
 # Regenerate with: scripts/generate_parsers.sh
-crates/nexflow-parser/src/generated/
+#crates/nexflow-parser/src/generated/
 
 # Generated output (from codegen runs)
 /output/
