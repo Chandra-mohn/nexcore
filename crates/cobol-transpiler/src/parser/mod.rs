@@ -282,8 +282,13 @@ pub fn parse_cobol_with_format(
 /// Extracts just the PROCEDURE DIVISION text and parses it independently.
 fn parse_proc_resilient(input: &str) -> (Option<ProcedureDivision>, Vec<TranspileDiagnostic>) {
     match parse_proc_division_isolated(input) {
-        Ok((pd, diags, _token_errors)) => (pd, diags),
+        Ok((pd, diags, _token_errors)) => {
+            eprintln!("[DEBUG parse_proc_resilient] result: pd={}, diags={}",
+                if pd.is_some() { "Some" } else { "None" }, diags.len());
+            (pd, diags)
+        }
         Err(e) => {
+            eprintln!("[DEBUG parse_proc_resilient] ERROR: {e}");
             tracing::warn!(error = %e, "Isolated PROCEDURE DIVISION parse failed");
             (None, Vec::new())
         }
@@ -630,9 +635,18 @@ fn extract_proc_division_source(source: &str) -> Option<String> {
 
     // Build a minimal wrapper so ANTLR can parse the procedure division.
     let proc_text = &source[line_start..];
-    Some(format!(
+    let proc_line_count = proc_text.lines().count();
+    let first_10: String = proc_text.lines().take(10).collect::<Vec<_>>().join("\n");
+    eprintln!("[DEBUG extract_proc] source total lines: {}", source.lines().count());
+    eprintln!("[DEBUG extract_proc] PROCEDURE DIVISION found at byte offset {proc_pos}, line_start={line_start}");
+    eprintln!("[DEBUG extract_proc] proc_text lines: {proc_line_count}");
+    eprintln!("[DEBUG extract_proc] first 10 lines of proc_text:\n{first_10}");
+
+    let wrapped = format!(
         "IDENTIFICATION DIVISION.\nPROGRAM-ID. ISOLATED-PROC.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\n{proc_text}"
-    ))
+    );
+    eprintln!("[DEBUG extract_proc] wrapped total lines: {}", wrapped.lines().count());
+    Some(wrapped)
 }
 
 /// Attempt to parse PROCEDURE DIVISION in isolation when the full-source parse
@@ -643,13 +657,49 @@ fn parse_proc_division_isolated(
 ) -> Result<(Option<ProcedureDivision>, Vec<TranspileDiagnostic>, Vec<TokenError>)> {
     let isolated = match extract_proc_division_source(source) {
         Some(s) => s,
-        None => return Ok((None, Vec::new(), Vec::new())),
+        None => {
+            eprintln!("[DEBUG parse_proc_isolated] extract_proc_division_source returned None");
+            return Ok((None, Vec::new(), Vec::new()));
+        }
     };
 
+    eprintln!("[DEBUG parse_proc_isolated] calling run_proc_listener_with_errors ({} chars)", isolated.len());
     let (listener, token_errors) = run_proc_listener_with_errors(&isolated)?;
 
+    eprintln!("[DEBUG parse_proc_isolated] listener results: sections={}, paragraphs={}, diagnostics={}, token_errors={}",
+        listener.sections.len(), listener.paragraphs.len(), listener.diagnostics.len(), token_errors.len());
+
+    if !token_errors.is_empty() {
+        let show = token_errors.len().min(20);
+        for te in &token_errors[..show] {
+            eprintln!("[DEBUG parse_proc_isolated] token_error: line={} col={} text={:?} msg={:?}",
+                te.line, te.column, te.offending_text, te.message);
+        }
+        if token_errors.len() > 20 {
+            eprintln!("[DEBUG parse_proc_isolated] ... and {} more token errors", token_errors.len() - 20);
+        }
+    }
+
+    if !listener.diagnostics.is_empty() {
+        let show = listener.diagnostics.len().min(20);
+        for d in &listener.diagnostics[..show] {
+            eprintln!("[DEBUG parse_proc_isolated] diag: line={} {:?} {:?}: {}",
+                d.line, d.severity, d.category, d.message);
+        }
+    }
+
     if listener.sections.is_empty() && listener.paragraphs.is_empty() {
+        eprintln!("[DEBUG parse_proc_isolated] NO sections or paragraphs found -- returning None");
         return Ok((None, listener.diagnostics, token_errors));
+    }
+
+    // Log what we found
+    for s in &listener.sections {
+        eprintln!("[DEBUG parse_proc_isolated] section: {} ({} paragraphs)", s.name, s.paragraphs.len());
+    }
+    for p in &listener.paragraphs {
+        let stmt_count: usize = p.sentences.iter().map(|s| s.statements.len()).sum();
+        eprintln!("[DEBUG parse_proc_isolated] standalone paragraph: {} ({} statements)", p.name, stmt_count);
     }
 
     Ok((

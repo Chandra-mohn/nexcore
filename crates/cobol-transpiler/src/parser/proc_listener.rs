@@ -86,6 +86,7 @@ impl<'input> Cobol85Listener<'input> for ProcedureDivisionListener {
         &mut self,
         _ctx: &ProcedureDivisionContext<'input>,
     ) {
+        eprintln!("[DEBUG proc_listener] enter_procedureDivision fired");
         self.in_proc_div = true;
     }
 
@@ -93,9 +94,12 @@ impl<'input> Cobol85Listener<'input> for ProcedureDivisionListener {
         &mut self,
         _ctx: &ProcedureDivisionContext<'input>,
     ) {
+        eprintln!("[DEBUG proc_listener] exit_procedureDivision fired (sections={}, paragraphs={})",
+            self.sections.len(), self.paragraphs.len());
         self.in_proc_div = false;
         // Flush remaining section if any
         if let Some(name) = self.current_section_name.take() {
+            eprintln!("[DEBUG proc_listener] flushing final section: {}", name);
             self.sections.push(Section {
                 name,
                 paragraphs: std::mem::take(&mut self.section_paragraphs),
@@ -108,10 +112,13 @@ impl<'input> Cobol85Listener<'input> for ProcedureDivisionListener {
         ctx: &ProcedureSectionContext<'input>,
     ) {
         if !self.in_proc_div {
+            eprintln!("[DEBUG proc_listener] enter_procedureSection SKIPPED (not in proc div)");
             return;
         }
+        eprintln!("[DEBUG proc_listener] enter_procedureSection fired");
         // Flush previous section if any
         if let Some(name) = self.current_section_name.take() {
+            eprintln!("[DEBUG proc_listener] flushing previous section: {} ({} paragraphs)", name, self.section_paragraphs.len());
             self.sections.push(Section {
                 name,
                 paragraphs: std::mem::take(&mut self.section_paragraphs),
@@ -129,6 +136,7 @@ impl<'input> Cobol85Listener<'input> for ProcedureDivisionListener {
         ctx: &ParagraphContext<'input>,
     ) {
         if !self.in_proc_div {
+            eprintln!("[DEBUG proc_listener] exit_paragraph SKIPPED (not in proc div)");
             return;
         }
 
@@ -136,6 +144,9 @@ impl<'input> Cobol85Listener<'input> for ProcedureDivisionListener {
             .paragraphName()
             .map(|pn| pn.get_text().trim().to_uppercase())
             .unwrap_or_else(|| warn_missing_name(ctx.start().get_line() as usize, &ctx.get_text(), "paragraph name"));
+
+        let sentence_count = ctx.sentence_all().len();
+        eprintln!("[DEBUG proc_listener] exit_paragraph: {name} (sentences in ctx: {sentence_count})");
 
         // Extract all statements from all sentences in this paragraph
         let mut sentences = Vec::new();
