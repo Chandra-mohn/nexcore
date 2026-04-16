@@ -16,7 +16,8 @@
 use serde::Serialize;
 
 use crate::ast::{
-    CondParam, DdKind, DdStatement, ExecType, IfCondition, IfTest, JclJob, JclStep, JobBodyItem,
+    CondOperator, CondParam, DdKind, DdStatement, ExecType, IfCondition, IfTest, JclJob, JclStep,
+    JobBodyItem,
 };
 use crate::resolve::ProcResolver;
 
@@ -710,7 +711,7 @@ fn format_if_test(test: &IfTest) -> String {
     match test {
         IfTest::Rc { step, operator, value } => {
             let prefix = step.as_deref().map_or("RC".to_string(), |s| format!("{s}.RC"));
-            format!("{prefix} {operator} {value}")
+            format!("{prefix} {} {value}", op_symbol(operator))
         }
         IfTest::Abend { step, value } => {
             let prefix = step.as_deref().map_or("ABEND".to_string(), |s| format!("{s}.ABEND"));
@@ -719,12 +720,23 @@ fn format_if_test(test: &IfTest) -> String {
         IfTest::AbendCc { step, operator, value } => {
             let prefix =
                 step.as_deref().map_or("ABENDCC".to_string(), |s| format!("{s}.ABENDCC"));
-            format!("{prefix} {operator} {value}")
+            format!("{prefix} {} {value}", op_symbol(operator))
         }
         IfTest::Run { step, value } => {
             let prefix = step.as_deref().map_or("RUN".to_string(), |s| format!("{s}.RUN"));
             format!("{prefix} = {value}")
         }
+    }
+}
+
+fn op_symbol(op: &CondOperator) -> &'static str {
+    match op {
+        CondOperator::Gt => ">",
+        CondOperator::Ge => ">=",
+        CondOperator::Eq => "=",
+        CondOperator::Lt => "<",
+        CondOperator::Le => "<=",
+        CondOperator::Ne => "!=",
     }
 }
 
