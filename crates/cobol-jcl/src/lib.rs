@@ -38,4 +38,5 @@ pub mod ast;
 pub mod error;
 pub mod graph;
 pub mod parser;
+pub mod proc_gen;
 pub mod resolve;
