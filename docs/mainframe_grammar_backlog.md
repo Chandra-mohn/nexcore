@@ -197,57 +197,81 @@ basic heuristics. A proper DB2z parser enables richer extraction.
 JCL defines batch job structure: job steps, file allocations, program
 execution, conditional processing. This maps to .proc batch orchestration.
 
-### Phase J1: Grammar Integration + AST
+### Phase J1: Grammar Integration + AST [DONE]
+
+| ID | Task | Status | Outcome |
+|----|------|--------|---------|
+| J1.1 | Copy JCL grammars to grammar/mainframe/jcl/ (12 .g4 files) | DONE | 14,857 lines in grammar/mainframe/jcl/ |
+| J1.2 | Create cobol-jcl crate skeleton | DONE | crates/cobol-jcl/ with 6 modules |
+| J1.3 | Hand-written JCL parser (not ANTLR) | DONE | parser.rs, 10 tests |
+| J1.4 | Define JclJob AST | DONE | ast.rs: JclJob, JclStep, ExecType, DdStatement, DdKind, Disposition, DcbParams, CondParam, IfCondition, JclProc |
+| J1.5 | Parse JCL source files (.jcl) | DONE | parse_jcl_file() reads from file system |
+| J1.6 | Proc file resolver | DONE | resolve.rs: finds procs by name across search paths, caches results, 4 tests |
+
+### Phase J2: Job Step -> Process Mapping [DONE -- skeleton]
+
+All items below produce output, but transforms are shallow
+(program name only, no business logic extraction).
+
+| ID | Task | Status | Outcome |
+|----|------|--------|---------|
+| J2.1 | Extract JOB card | DONE | Job name, class, params -> process name + mode batch |
+| J2.2 | Extract EXEC PGM steps | DONE | Program name -> transform using PGM into output |
+| J2.3 | Extract EXEC PROC steps | DONE | Proc name -> call / inline sub-graph (recursive) |
+| J2.4 | Extract DD statements | DONE | DSN, DISP, DCB -> receive from file / emit to file |
+| J2.5 | Map SYSOUT/SYSIN DDs | DONE | SYSOUT -> emit to log, SYSIN inline -> comment |
+| J2.6 | Map SORTIN/SORTOUT DDs | DONE | Classified as input/output in graph + proc_gen |
+| J2.7 | Extract COND parameters | DONE | COND= parsed and displayed (not yet .proc if guard) |
+| J2.8 | Extract IF/THEN/ELSE | DONE | JCL IF -> ProcDSL if/else/endif |
+
+### Phase J3: File Allocation -> Connector Enrichment [PENDING]
+
+Current state: receive/emit use `file "DSN"` with DSN string.
+These items enrich the connector config with real types and schemas.
 
 | ID | Task | Scope | Outcome |
 |----|------|-------|---------|
-| J1.1 | Copy JCL grammars to grammar/mainframe/jcl/ (all 10 .g4 files) | File copy + LICENSE | Grammar available |
-| J1.2 | Create cobol-jcl crate skeleton | New crate | Cargo.toml, lib.rs |
-| J1.3 | Generate Rust parser for JCLParser.g4 | Build script | Core JCL parsed |
-| J1.4 | Define JclJob AST | JOB, EXEC, DD structured types | Typed AST |
-| J1.5 | Parse JCL source files (.jcl) | Read from file system | Job definitions loaded |
+| J3.1 | Map DSN patterns to logical names | PROD.ACCT.MASTER -> acct_master | Readable stream names in .proc |
+| J3.2 | Map DISP to connector mode | SHR -> read-only, NEW -> create, MOD -> append | Connector options on receive/emit |
+| J3.3 | Map DCB to schema hints | RECFM=FB,LRECL=80 -> schema reference with record layout | import .schema, schema block on receive |
+| J3.4 | Map RECORG to VSAM connector | RECORG=KS -> jdbc/db connector | Replace file with jdbc for VSAM |
+| J3.5 | Map GDG patterns | dataset.G0001V00 -> versioned file connector | .proc batch versioning support |
 
-### Phase J2: Job Step -> Process Mapping
+### Phase J4: Process Orchestration Enrichment [PENDING]
 
-| ID | Task | Scope | Outcome |
-|----|------|-------|---------|
-| J2.1 | Extract JOB card | Job name, class, priority, notify | .proc process name + metadata |
-| J2.2 | Extract EXEC PGM steps | Program name, PARM, COND | .proc transform steps (one per EXEC) |
-| J2.3 | Extract EXEC PROC steps | Procedure invocations | .proc sub-process references |
-| J2.4 | Extract DD statements | DSN, DISP, DCB (RECFM/LRECL/BLKSIZE) | .proc receive/emit with file connector |
-| J2.5 | Map SYSOUT/SYSIN DDs | Standard I/O streams | .proc system connectors |
-| J2.6 | Map SORTIN/SORTOUT DDs | SORT utility I/O | .proc sort/order operations |
-| J2.7 | Extract COND parameters | Step conditional execution | .proc if/route logic |
-| J2.8 | Extract IF/THEN/ELSE | JCL conditional processing | .proc conditional steps |
-
-### Phase J3: File Allocation -> Connector Mapping
+Current state: proc_gen emits skeleton with comments.
+These items produce real ProcDSL statements instead of placeholders.
 
 | ID | Task | Scope | Outcome |
 |----|------|-------|---------|
-| J3.1 | Map DSN patterns | Dataset naming conventions -> logical names | .proc connector config |
-| J3.2 | Map DISP parameters | NEW/OLD/SHR/MOD -> create/read/append | .proc I/O direction |
-| J3.3 | Map DCB parameters | RECFM/LRECL/BLKSIZE -> record format | .schema field layout hints |
-| J3.4 | Map UNIT/VOL | Storage allocation | Deployment config (not DSL) |
-| J3.5 | Map GDG (Generation Data Group) | Versioned datasets | .proc batch versioning |
+| J4.1 | SORT -> order_by statement | Parse SORT control cards (SYSIN DD *) for SORT FIELDS= | Real `order_by field1 asc, field2 desc` |
+| J4.2 | IDCAMS -> data management ops | Parse SYSIN for DEFINE/DELETE/REPRO/PRINT | Real receive/emit for VSAM operations |
+| J4.3 | IEBGENER/IEBCOPY -> file copy | Map utility semantics | `transform input using copy into output` |
+| J4.4 | Cross-reference PGM to COBOL source | Match EXEC PGM=MYPROG to MYPROG.cbl in project | import .xform/.rules from E2/E3 output |
+| J4.5 | PARM= to parameter binding | Parse PARM string -> ProcDSL set/let statements | Real parameter values in transforms |
+| J4.6 | COND= to step guard | COND=(4,LT,STEP1) -> if/endif wrapping the step | Proper conditional step execution |
+| J4.7 | PROC symbolic overrides | EXEC MYPROC,IN=value -> parameter substitution | Proc call with real parameters |
 
-### Phase J4: Multi-Step Job -> Process Orchestration
-
-| ID | Task | Scope | Outcome |
-|----|------|-------|---------|
-| J4.1 | Build job step dependency graph | COND codes + IF/THEN/ELSE | Step sequencing |
-| J4.2 | Detect SORT steps | EXEC PGM=SORT/DFSORT/SYNCSORT | .proc order by + group by |
-| J4.3 | Detect IDCAMS steps | EXEC PGM=IDCAMS (VSAM utility) | .proc data management |
-| J4.4 | Detect IEFBR14 steps | Allocation-only steps | .proc lifecycle management |
-| J4.5 | Map PROC invocations | Cataloged procedures -> reusable sub-processes | .proc import references |
-| J4.6 | Emit .proc from job structure | One .proc per JCL job | Complete batch orchestration |
-
-### Phase J5: TSO/DB2 Integration
+### Phase J5: TSO/DB2 Integration [PENDING]
 
 | ID | Task | Scope | Outcome |
 |----|------|-------|---------|
 | J5.1 | Parse SYSTSIN DD for DSN commands | TSOParser + DSNTSOParser | DB2 program execution context |
 | J5.2 | Extract RUN PROGRAM from DSN | Actual DB2 program being executed | Link JCL step -> COBOL program |
 | J5.3 | Extract BIND/FREE from DSN | DB2 plan management | Deployment automation |
+
+### Phase J6: NexStudio Visualization [DONE -- foundation, pending refinements]
+
+| ID | Task | Status | Outcome |
+|----|------|--------|---------|
+| J6.1 | Process graph visualization | DONE | @xyflow/svelte DAG with node types, colors, detail panel |
+| J6.2 | Collapsible sub-graph for procs | DONE | Amber double-border group nodes, expand/collapse |
+| J6.3 | Tabbed viewer (Graph / Source / .proc DSL) | DONE | Matches ScreenViewer pattern |
+| J6.4 | .proc DSL generation (Route 2) | DONE | proc_gen.rs, skeleton with real connectors |
+| J6.5 | ELK auto-layout | PENDING | Replace manual positioning with ELK layered layout |
+| J6.6 | Data flow edges | PENDING | Show dataset lineage: step A writes DSN -> step B reads same DSN |
+| J6.7 | Click-to-open COBOL source | PENDING | Click PGM node -> open MYPROG.cbl if in project tree |
+| J6.8 | Proc file navigation | PENDING | Click proc node -> open the .jcl proc file in editor |
 
 ---
 
