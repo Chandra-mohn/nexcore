@@ -646,6 +646,13 @@ fn extract_proc_division_source(source: &str) -> Option<String> {
         "IDENTIFICATION DIVISION.\nPROGRAM-ID. ISOLATED-PROC.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\n{proc_text}"
     );
     eprintln!("[DEBUG extract_proc] wrapped total lines: {}", wrapped.lines().count());
+
+    // Dump isolated source for manual inspection when NEXMIG_DUMP_ISOLATED is set.
+    if std::env::var("NEXMIG_DUMP_ISOLATED").is_ok() {
+        let _ = std::fs::write("/tmp/ss_isolated_proc.cbl", &wrapped);
+        eprintln!("[DEBUG] Wrote isolated proc source to /tmp/ss_isolated_proc.cbl");
+    }
+
     Some(wrapped)
 }
 
