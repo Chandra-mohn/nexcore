@@ -78,8 +78,12 @@ echo ""
 echo "=========================================="
 echo "TEST 9: Check what parse produces with -f fixed"
 echo "=========================================="
-echo "Sections found:"
-$NEXMIG parse -f fixed $COPY_ARGS "$SRC" --format json 2>/dev/null | grep -oE '"(WORKING-STORAGE|LINKAGE|FILE|PROCEDURE)"' | sort | uniq -c
+echo "Procedure division present:"
+$NEXMIG parse -f fixed $COPY_ARGS "$SRC" --format json 2>/dev/null | grep -c '"sections"'
+echo "Section names:"
+$NEXMIG parse -f fixed $COPY_ARGS "$SRC" --format json 2>/dev/null | grep -oE '"name": "[A-Z0-9-]+ SECTION"' | head -20
+echo "Paragraph count:"
+$NEXMIG parse -f fixed $COPY_ARGS "$SRC" --format json 2>/dev/null | grep -c '"sentences"'
 echo ""
 
 echo "=========================================="
