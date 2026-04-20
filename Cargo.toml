@@ -27,6 +27,10 @@ members = [
     "crates/cobol-data",
     "crates/cobol-intel",
 
+    # NexStream (Kafka + Schema Registry)
+    "crates/nex-registry",
+    "crates/nex-kafka",
+
     # CLIs
     "crates/nexmig-cli",
 ]
@@ -117,6 +121,10 @@ cobol-jcl = { path = "crates/cobol-jcl" }
 # Internal crates -- NexIntel
 cobol-data = { path = "crates/cobol-data" }
 cobol-intel = { path = "crates/cobol-intel" }
+
+# Internal crates -- NexStream
+nex-registry = { path = "crates/nex-registry" }
+nex-kafka = { path = "crates/nex-kafka" }
 
 # Internal crates -- NexMod
 nexflow-parser = { path = "crates/nexflow-parser" }

@@ -1,0 +1,19 @@
+[package]
+name = "nex-kafka"
+description = "Kafka client with message decoding, PII masking, and filtering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+nex-registry = { path = "../nex-registry" }
+rdkafka = { version = "0.36", features = ["cmake-build"] }
+regex = "1"
+
+[lints]
+workspace = true
