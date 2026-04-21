@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use rdkafka::admin::AdminClient;
-use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::{Headers, Message};
@@ -37,6 +35,8 @@ impl KafkaClient {
         let mut cfg = ClientConfig::new();
         cfg.set("bootstrap.servers", &self.config.bootstrap_servers);
         cfg.set("security.protocol", &self.config.security_protocol);
+        // Suppress librdkafka's noisy stderr logging (show errors only)
+        cfg.set("log_level", "3");
 
         if let Some(mechanism) = &self.config.sasl_mechanism {
             cfg.set("sasl.mechanism", mechanism);
@@ -53,11 +53,15 @@ impl KafkaClient {
 
     /// Verify connectivity by fetching cluster metadata.
     pub fn test_connection(&self) -> Result<String, KafkaError> {
-        let admin: AdminClient<DefaultClientContext> =
-            self.base_config().create()?;
-        let metadata = admin
-            .inner()
-            .fetch_metadata(None, Duration::from_secs(10))
+        let consumer: BaseConsumer = self
+            .base_config()
+            .set("group.id", "nexstudio-health")
+            .set("session.timeout.ms", "6000")
+            .set("socket.timeout.ms", "5000")
+            .create()?;
+
+        let metadata = consumer
+            .fetch_metadata(None, Duration::from_secs(5))
             .map_err(|e| KafkaError::Client(e.to_string()))?;
 
         let broker_count = metadata.brokers().len();
