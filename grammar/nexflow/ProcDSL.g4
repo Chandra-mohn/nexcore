@@ -115,6 +115,7 @@ processingBlock
     | filterStatement                                          // GAP-09: standalone filter
     | groupByStatement                                         // GAP-22: batch GROUP BY
     | orderByStatement                                         // GAP-23: batch ORDER BY
+    | detectStatement                                          // NS25: CEP pattern matching
     ;
 
 // ----------------------------------------------------------------------------
@@ -126,6 +127,18 @@ executionBlock
       partitionDecl?
       timeDecl?
       modeDecl?
+      deliveryGuarantee?
+      transactionTimeoutDecl?
+    ;
+
+deliveryGuarantee
+    : EXACTLY_ONCE
+    | AT_LEAST_ONCE
+    | AT_MOST_ONCE
+    ;
+
+transactionTimeoutDecl
+    : TRANSACTION_TIMEOUT duration
     ;
 
 parallelismDecl
@@ -309,6 +322,12 @@ connectorOptions
     | csvOptions                                   // CSV-specific options
     | formatOverride                               // Serialization format override
     | registryOverride                             // Schema registry URL override
+    | WATCH                                        // NS25: CDC change stream (MongoDB)
+    | OPERATION IN LPAREN stringList RPAREN        // NS25: CDC operation filter
+    ;
+
+stringList
+    : STRING (COMMA STRING)*
     ;
 
 // Serialization format override (use sparingly)
@@ -645,6 +664,7 @@ joinDecl
         ON joinCondition
         (WITHIN duration)?                                     // Optional: required for stream, omitted for batch
         joinType?
+        asOfClause?                                            // NS25: temporal join time reference
         (SELECT fieldList)?                                    // GAP-08: project fields
         schemaDecl?                                            // GAP-18: output schema
         (INTO IDENTIFIER)?                                     // GAP-02: output naming
@@ -657,7 +677,11 @@ joinCondition
     ;
 
 joinType
-    : TYPE (INNER | LEFT | RIGHT | OUTER)
+    : TYPE (INNER | LEFT | RIGHT | OUTER | TEMPORAL)
+    ;
+
+asOfClause
+    : AS_OF fieldPath
     ;
 
 // Merge
@@ -889,6 +913,40 @@ orderByField
 orderDirection
     : ASC
     | DESC
+    ;
+
+// ----------------------------------------------------------------------------
+// NS25: CEP Pattern Detection
+// ----------------------------------------------------------------------------
+
+detectStatement
+    : DETECT IDENTIFIER FROM IDENTIFIER
+        PATTERN patternExpr
+        (WHERE expression)?
+        (WITHIN duration)?
+        (ON MATCH detectAction)?
+        (ON TIMEOUT detectAction)?
+        END
+    ;
+
+patternExpr
+    : patternType LPAREN patternElement (COMMA patternElement)* RPAREN
+    ;
+
+patternType
+    : SEQUENCE
+    | ANY_PATTERN
+    | FOLLOWED_BY
+    ;
+
+patternElement
+    : IDENTIFIER (WHERE expression)? (TIMES INTEGER)?
+    ;
+
+detectAction
+    : emitDecl
+    | SKIP_ACTION
+    | DEAD_LETTER STRING
     ;
 
 // ----------------------------------------------------------------------------
@@ -1421,6 +1479,10 @@ STREAM        : 'stream' ;
 BATCH         : 'batch' ;
 MICRO_BATCH   : 'micro_batch' ;
 EVENTS        : 'events' ;
+EXACTLY_ONCE       : 'exactly_once' ;                          // NS25: delivery guarantee
+AT_LEAST_ONCE      : 'at_least_once' ;                         // NS25: delivery guarantee
+AT_MOST_ONCE       : 'at_most_once' ;                          // NS25: delivery guarantee
+TRANSACTION_TIMEOUT : 'transaction_timeout' ;                   // NS25: txn timeout
 
 // ----------------------------------------------------------------------------
 // Keywords - Business Date, Processing Date and Markers
@@ -1581,6 +1643,8 @@ INNER         : 'inner' ;
 LEFT          : 'left' ;
 RIGHT         : 'right' ;
 OUTER         : 'outer' ;
+TEMPORAL      : 'temporal' ;                                   // NS25: temporal join
+AS_OF         : 'as_of' ;                                      // NS25: temporal join time ref
 
 // ----------------------------------------------------------------------------
 // Keywords - Correlation
@@ -1724,6 +1788,17 @@ USER          : 'user' ;
 
 DEDUPLICATE   : 'deduplicate' ;
 
+// NS25: CEP keywords
+DETECT        : 'detect' ;
+PATTERN       : 'pattern' ;
+SEQUENCE      : 'sequence' ;
+ANY_PATTERN   : 'any_of' ;
+FOLLOWED_BY   : 'followed_by' ;
+
+// NS25: CDC keywords
+WATCH         : 'watch' ;
+OPERATION     : 'operation' ;
+
 // ----------------------------------------------------------------------------
 // Keywords - Validation
 // ----------------------------------------------------------------------------
@@ -1784,6 +1859,7 @@ ORDER         : 'order' ;                                      // GAP-23
 ASC           : 'asc' ;                                        // GAP-23
 DESC          : 'desc' ;                                       // GAP-23
 HAVING        : 'having' ;                                     // GAP-22
+WHERE         : 'where' ;                                      // NS25: CEP pattern condition
 
 // ----------------------------------------------------------------------------
 // Time Units

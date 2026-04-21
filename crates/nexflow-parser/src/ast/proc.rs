@@ -36,6 +36,8 @@ pub struct ExecutionBlock {
     pub mode: Option<String>,
     pub parallelism: Option<i64>,
     pub checkpoint_interval: Option<String>,
+    pub delivery_guarantee: Option<String>,     // exactly_once, at_least_once, at_most_once
+    pub transaction_timeout: Option<String>,    // duration string
 }
 
 /// Marker declaration.
@@ -92,6 +94,16 @@ pub enum ProcessStatement {
         join_type: String,
         on: String,
         within: Option<String>,
+        as_of: Option<String>,
+    },
+    Detect {
+        name: String,
+        source: String,
+        pattern: String,
+        condition: Option<String>,
+        within: Option<String>,
+        on_match: Option<String>,
+        on_timeout: Option<String>,
     },
     Evaluate {
         raw: String,

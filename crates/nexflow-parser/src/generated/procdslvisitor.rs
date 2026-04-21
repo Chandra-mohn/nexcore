@@ -1,5 +1,5 @@
 #![allow(nonstandard_style)]
-// Generated from /Users/chandramohn/workspace/nexcore/grammar/nexflow/ProcDSL.g4 by ANTLR 4.8
+// Generated from grammar/nexflow/ProcDSL.g4 by ANTLR 4.8
 use antlr_rust::tree::{ParseTreeVisitor,ParseTreeVisitorCompat};
 use super::procdslparser::*;
 
@@ -79,6 +79,18 @@ pub trait ProcDSLVisitor<'input>: ParseTreeVisitor<'input,ProcDSLParserContextTy
 	 * @param ctx the parse tree
 	 */
 	fn visit_executionBlock(&mut self, ctx: &ExecutionBlockContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#deliveryGuarantee}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_deliveryGuarantee(&mut self, ctx: &DeliveryGuaranteeContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#transactionTimeoutDecl}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_transactionTimeoutDecl(&mut self, ctx: &TransactionTimeoutDeclContext<'input>) { self.visit_children(ctx) }
 
 	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#parallelismDecl}.
@@ -241,6 +253,12 @@ pub trait ProcDSLVisitor<'input>: ParseTreeVisitor<'input,ProcDSLParserContextTy
 	 * @param ctx the parse tree
 	 */
 	fn visit_connectorOptions(&mut self, ctx: &ConnectorOptionsContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#stringList}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_stringList(&mut self, ctx: &StringListContext<'input>) { self.visit_children(ctx) }
 
 	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#formatOverride}.
@@ -573,10 +591,22 @@ pub trait ProcDSLVisitor<'input>: ParseTreeVisitor<'input,ProcDSLParserContextTy
 	fn visit_joinDecl(&mut self, ctx: &JoinDeclContext<'input>) { self.visit_children(ctx) }
 
 	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#joinCondition}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_joinCondition(&mut self, ctx: &JoinConditionContext<'input>) { self.visit_children(ctx) }
+
+	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#joinType}.
 	 * @param ctx the parse tree
 	 */
 	fn visit_joinType(&mut self, ctx: &JoinTypeContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#asOfClause}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_asOfClause(&mut self, ctx: &AsOfClauseContext<'input>) { self.visit_children(ctx) }
 
 	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#mergeDecl}.
@@ -769,6 +799,66 @@ pub trait ProcDSLVisitor<'input>: ParseTreeVisitor<'input,ProcDSLParserContextTy
 	 * @param ctx the parse tree
 	 */
 	fn visit_ifBody(&mut self, ctx: &IfBodyContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#filterStatement}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_filterStatement(&mut self, ctx: &FilterStatementContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#groupByStatement}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_groupByStatement(&mut self, ctx: &GroupByStatementContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#orderByStatement}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_orderByStatement(&mut self, ctx: &OrderByStatementContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#orderByField}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_orderByField(&mut self, ctx: &OrderByFieldContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#orderDirection}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_orderDirection(&mut self, ctx: &OrderDirectionContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#detectStatement}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_detectStatement(&mut self, ctx: &DetectStatementContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#patternExpr}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_patternExpr(&mut self, ctx: &PatternExprContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#patternType}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_patternType(&mut self, ctx: &PatternTypeContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#patternElement}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_patternElement(&mut self, ctx: &PatternElementContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#detectAction}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_detectAction(&mut self, ctx: &DetectActionContext<'input>) { self.visit_children(ctx) }
 
 	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#emitDecl}.
@@ -1143,6 +1233,18 @@ pub trait ProcDSLVisitor<'input>: ParseTreeVisitor<'input,ProcDSLParserContextTy
 	fn visit_primaryExpression(&mut self, ctx: &PrimaryExpressionContext<'input>) { self.visit_children(ctx) }
 
 	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#caseExpression}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_caseExpression(&mut self, ctx: &CaseExpressionContext<'input>) { self.visit_children(ctx) }
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#caseWhenClause}.
+	 * @param ctx the parse tree
+	 */
+	fn visit_caseWhenClause(&mut self, ctx: &CaseWhenClauseContext<'input>) { self.visit_children(ctx) }
+
+	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#ternaryExpression}.
 	 * @param ctx the parse tree
 	 */
@@ -1346,6 +1448,22 @@ pub trait ProcDSLVisitorCompat<'input>:ParseTreeVisitorCompat<'input, Node= Proc
 	 * @param ctx the parse tree
 	 */
 		fn visit_executionBlock(&mut self, ctx: &ExecutionBlockContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#deliveryGuarantee}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_deliveryGuarantee(&mut self, ctx: &DeliveryGuaranteeContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#transactionTimeoutDecl}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_transactionTimeoutDecl(&mut self, ctx: &TransactionTimeoutDeclContext<'input>) -> Self::Return {
 			self.visit_children(ctx)
 		}
 
@@ -1562,6 +1680,14 @@ pub trait ProcDSLVisitorCompat<'input>:ParseTreeVisitorCompat<'input, Node= Proc
 	 * @param ctx the parse tree
 	 */
 		fn visit_connectorOptions(&mut self, ctx: &ConnectorOptionsContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#stringList}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_stringList(&mut self, ctx: &StringListContext<'input>) -> Self::Return {
 			self.visit_children(ctx)
 		}
 
@@ -2006,10 +2132,26 @@ pub trait ProcDSLVisitorCompat<'input>:ParseTreeVisitorCompat<'input, Node= Proc
 		}
 
 	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#joinCondition}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_joinCondition(&mut self, ctx: &JoinConditionContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#joinType}.
 	 * @param ctx the parse tree
 	 */
 		fn visit_joinType(&mut self, ctx: &JoinTypeContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#asOfClause}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_asOfClause(&mut self, ctx: &AsOfClauseContext<'input>) -> Self::Return {
 			self.visit_children(ctx)
 		}
 
@@ -2266,6 +2408,86 @@ pub trait ProcDSLVisitorCompat<'input>:ParseTreeVisitorCompat<'input, Node= Proc
 	 * @param ctx the parse tree
 	 */
 		fn visit_ifBody(&mut self, ctx: &IfBodyContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#filterStatement}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_filterStatement(&mut self, ctx: &FilterStatementContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#groupByStatement}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_groupByStatement(&mut self, ctx: &GroupByStatementContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#orderByStatement}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_orderByStatement(&mut self, ctx: &OrderByStatementContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#orderByField}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_orderByField(&mut self, ctx: &OrderByFieldContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#orderDirection}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_orderDirection(&mut self, ctx: &OrderDirectionContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#detectStatement}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_detectStatement(&mut self, ctx: &DetectStatementContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#patternExpr}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_patternExpr(&mut self, ctx: &PatternExprContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#patternType}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_patternType(&mut self, ctx: &PatternTypeContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#patternElement}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_patternElement(&mut self, ctx: &PatternElementContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#detectAction}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_detectAction(&mut self, ctx: &DetectActionContext<'input>) -> Self::Return {
 			self.visit_children(ctx)
 		}
 
@@ -2766,6 +2988,22 @@ pub trait ProcDSLVisitorCompat<'input>:ParseTreeVisitorCompat<'input, Node= Proc
 		}
 
 	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#caseExpression}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_caseExpression(&mut self, ctx: &CaseExpressionContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
+	 * Visit a parse tree produced by {@link ProcDSLParser#caseWhenClause}.
+	 * @param ctx the parse tree
+	 */
+		fn visit_caseWhenClause(&mut self, ctx: &CaseWhenClauseContext<'input>) -> Self::Return {
+			self.visit_children(ctx)
+		}
+
+	/**
 	 * Visit a parse tree produced by {@link ProcDSLParser#ternaryExpression}.
 	 * @param ctx the parse tree
 	 */
@@ -2975,6 +3213,16 @@ where
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
 	}
 
+	fn visit_deliveryGuarantee(&mut self, ctx: &DeliveryGuaranteeContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_deliveryGuarantee(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_transactionTimeoutDecl(&mut self, ctx: &TransactionTimeoutDeclContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_transactionTimeoutDecl(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
 	fn visit_parallelismDecl(&mut self, ctx: &ParallelismDeclContext<'input>){
 		let result = <Self as ProcDSLVisitorCompat>::visit_parallelismDecl(self, ctx);
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
@@ -3107,6 +3355,11 @@ where
 
 	fn visit_connectorOptions(&mut self, ctx: &ConnectorOptionsContext<'input>){
 		let result = <Self as ProcDSLVisitorCompat>::visit_connectorOptions(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_stringList(&mut self, ctx: &StringListContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_stringList(self, ctx);
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
 	}
 
@@ -3385,8 +3638,18 @@ where
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
 	}
 
+	fn visit_joinCondition(&mut self, ctx: &JoinConditionContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_joinCondition(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
 	fn visit_joinType(&mut self, ctx: &JoinTypeContext<'input>){
 		let result = <Self as ProcDSLVisitorCompat>::visit_joinType(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_asOfClause(&mut self, ctx: &AsOfClauseContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_asOfClause(self, ctx);
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
 	}
 
@@ -3547,6 +3810,56 @@ where
 
 	fn visit_ifBody(&mut self, ctx: &IfBodyContext<'input>){
 		let result = <Self as ProcDSLVisitorCompat>::visit_ifBody(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_filterStatement(&mut self, ctx: &FilterStatementContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_filterStatement(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_groupByStatement(&mut self, ctx: &GroupByStatementContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_groupByStatement(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_orderByStatement(&mut self, ctx: &OrderByStatementContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_orderByStatement(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_orderByField(&mut self, ctx: &OrderByFieldContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_orderByField(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_orderDirection(&mut self, ctx: &OrderDirectionContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_orderDirection(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_detectStatement(&mut self, ctx: &DetectStatementContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_detectStatement(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_patternExpr(&mut self, ctx: &PatternExprContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_patternExpr(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_patternType(&mut self, ctx: &PatternTypeContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_patternType(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_patternElement(&mut self, ctx: &PatternElementContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_patternElement(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_detectAction(&mut self, ctx: &DetectActionContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_detectAction(self, ctx);
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
 	}
 
@@ -3857,6 +4170,16 @@ where
 
 	fn visit_primaryExpression(&mut self, ctx: &PrimaryExpressionContext<'input>){
 		let result = <Self as ProcDSLVisitorCompat>::visit_primaryExpression(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_caseExpression(&mut self, ctx: &CaseExpressionContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_caseExpression(self, ctx);
+        *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
+	}
+
+	fn visit_caseWhenClause(&mut self, ctx: &CaseWhenClauseContext<'input>){
+		let result = <Self as ProcDSLVisitorCompat>::visit_caseWhenClause(self, ctx);
         *<Self as ParseTreeVisitorCompat>::temp_result(self) = result;
 	}
 

@@ -172,10 +172,22 @@ fn build_execution_block(ctx: &ExecutionBlockContext<'_>) -> ExecutionBlock {
 
     let checkpoint_interval = None; // From checkpointDecl if present
 
+    // NS25: delivery guarantee (exactly_once / at_least_once / at_most_once)
+    let delivery_guarantee = ctx
+        .deliveryGuarantee()
+        .map(|dg| dg.get_text());
+
+    // NS25: transaction timeout
+    let transaction_timeout = ctx
+        .transactionTimeoutDecl()
+        .map(|td| td.get_text().replace("transaction_timeout", "").trim().to_string());
+
     ExecutionBlock {
         mode,
         parallelism,
         checkpoint_interval,
+        delivery_guarantee,
+        transaction_timeout,
     }
 }
 
@@ -344,7 +356,12 @@ fn build_processing_block(ctx: &ProcessingBlockContext<'_>) -> Option<ProcessSta
             join_type: "merge".to_string(),
             on: md.get_text(),
             within: None,
+            as_of: None,
         });
+    }
+    // NS25: CEP detect statement
+    if let Some(ds) = ctx.detectStatement() {
+        return Some(build_detect_statement(&*ds));
     }
     if let Some(es) = ctx.evaluateStatement() {
         return Some(ProcessStatement::Evaluate {
@@ -366,7 +383,7 @@ fn build_processing_block(ctx: &ProcessingBlockContext<'_>) -> Option<ProcessSta
 fn build_enrich_decl(ctx: &EnrichDeclContext<'_>) -> ProcessStatement {
     // Grammar: ENRICH USING IDENTIFIER ON fieldList selectClause?
     let target = ctx
-        .IDENTIFIER()
+        .IDENTIFIER(0)
         .map(|id| terminal_text(&*id))
         .unwrap_or_default();
 
@@ -450,7 +467,7 @@ fn build_route_decl(ctx: &RouteDeclContext<'_>) -> ProcessStatement {
 fn build_aggregate_decl(ctx: &AggregateDeclContext<'_>) -> ProcessStatement {
     // Grammar: AGGREGATE (USING IDENTIFIER | IDENTIFIER) aggregateOptions?
     let name = ctx
-        .IDENTIFIER()
+        .IDENTIFIER(0)
         .map(|id| terminal_text(&*id))
         .unwrap_or_default();
 
@@ -509,12 +526,60 @@ fn build_join_decl(ctx: &JoinDeclContext<'_>) -> ProcessStatement {
 
     let within = ctx.duration().map(|d| d.get_text());
 
+    // NS25: temporal join as_of clause
+    let as_of = ctx
+        .asOfClause()
+        .map(|ao| ao.get_text().replace("as_of", "").trim().to_string());
+
     ProcessStatement::Join {
         left,
         right,
         join_type,
         on,
         within,
+        as_of,
+    }
+}
+
+// NS25: CEP detect statement builder
+fn build_detect_statement(ctx: &DetectStatementContext<'_>) -> ProcessStatement {
+    let ids = ctx.IDENTIFIER_all();
+    let name = ids.first().map(|id| terminal_text(id)).unwrap_or_default();
+    let source = ids.get(1).map(|id| terminal_text(id)).unwrap_or_default();
+
+    let pattern = ctx
+        .patternExpr()
+        .map(|pe| pe.get_text())
+        .unwrap_or_default();
+
+    // joinCondition is reused here as expression in WHERE clause
+    let condition = ctx
+        .expression()
+        .map(|e| e.get_text());
+
+    let within = ctx.duration().map(|d| d.get_text());
+
+    // on_match and on_timeout captured as raw text
+    let raw = ctx.get_text();
+    let on_match = if raw.contains("onmatch") || raw.contains("on match") {
+        Some("match_action".to_string())
+    } else {
+        None
+    };
+    let on_timeout = if raw.contains("ontimeout") || raw.contains("on timeout") {
+        Some("timeout_action".to_string())
+    } else {
+        None
+    };
+
+    ProcessStatement::Detect {
+        name,
+        source,
+        pattern,
+        condition,
+        within,
+        on_match,
+        on_timeout,
     }
 }
 
