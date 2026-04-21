@@ -1,0 +1,22 @@
+[package]
+name = "nex-doctor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Pipeline diagnostics: topology builder, connectivity checks, diagnostic engine"
+
+[dependencies]
+nexflow-parser = { workspace = true }
+nex-kafka = { workspace = true }
+nex-registry = { workspace = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { version = "1", features = ["time"] }
+
+[lints]
+workspace = true

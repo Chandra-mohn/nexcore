@@ -31,6 +31,9 @@ members = [
     "crates/nex-registry",
     "crates/nex-kafka",
 
+    # NexDoctor (pipeline diagnostics)
+    "crates/nex-doctor",
+
     # CLIs
     "crates/nexmig-cli",
 ]
@@ -125,6 +128,7 @@ cobol-intel = { path = "crates/cobol-intel" }
 # Internal crates -- NexStream
 nex-registry = { path = "crates/nex-registry" }
 nex-kafka = { path = "crates/nex-kafka" }
+nex-doctor = { path = "crates/nex-doctor" }
 
 # Internal crates -- NexMod
 nexflow-parser = { path = "crates/nexflow-parser" }
