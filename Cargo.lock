@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-arithmetic"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-core",
  "cobol-types",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-core"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "rust_decimal",
  "rust_decimal_macros",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-data"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-transpiler",
  "miette",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-intel"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "aes-gcm",
  "bincode",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-io"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-core",
  "cobol-move",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-jcl"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "miette",
  "pretty_assertions",
@@ -723,11 +723,11 @@ dependencies = [
 
 [[package]]
 name = "cobol-macros"
-version = "0.2.14"
+version = "0.3.0"
 
 [[package]]
 name = "cobol-move"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-core",
  "cobol-types",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-runtime"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-arithmetic",
  "cobol-core",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-rustify"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-transpiler",
  "proc-macro2",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-sort"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-core",
  "cobol-io",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-sql"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cobol-core",
  "cobol-types",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-transpiler"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "antlr-rust",
  "miette",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "cobol-types"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "byteorder",
  "cobol-core",
@@ -2107,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "nex-doctor"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "nex-kafka",
  "nex-registry",
@@ -2122,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "nex-kafka"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "nex-registry",
  "rdkafka",
@@ -2134,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "nex-registry"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "nexflow-cli"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "clap",
  "miette",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "nexflow-codegen"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "nexflow-parser",
  "pretty_assertions",
@@ -2169,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "nexflow-compiler"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "miette",
  "nexflow-parser",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "nexflow-parser"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "antlr-rust",
  "miette",
@@ -2191,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "nexmig-cli"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "clap",
  "cobol-data",
