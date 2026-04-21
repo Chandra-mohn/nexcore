@@ -96,6 +96,15 @@ pub struct ReplayReport {
     pub duration_ms: u64,
 }
 
+/// Consumer group info with lag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumerGroupInfo {
+    pub group_id: String,
+    pub topic: String,
+    pub total_lag: i64,
+    pub state: String,
+}
+
 /// PII masking configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiiConfig {

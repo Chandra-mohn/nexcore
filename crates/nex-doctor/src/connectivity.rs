@@ -286,6 +286,125 @@ async fn check_connect_connectivity(base_url: &str) -> Result<String, String> {
     }
 }
 
+/// Check data flow health: DLQ message counts, consumer group lag.
+///
+/// Only runs if Kafka connectivity succeeded. Mutates metrics and issues in-place.
+pub fn check_data_flow(
+    nodes: &[PipelineNode],
+    kafka_config: &KafkaConfig,
+    _dlq_prefix: &str,
+    lag_warning: i64,
+    lag_critical: i64,
+    dlq_threshold: i64,
+    metrics: &mut Vec<NodeMetrics>,
+    issues: &mut Vec<DiagnosticIssue>,
+) {
+    let now = chrono_now();
+
+    let client = match KafkaClient::new(kafka_config) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Check DLQ topics for messages
+    for node in nodes.iter().filter(|n| n.node_type == NodeType::DeadLetterQueue) {
+        let topic_name = match &node.config {
+            crate::types::NodeConfig::DeadLetterQueue { topic_name, .. } => topic_name.clone(),
+            _ => continue,
+        };
+
+        match client.get_topic_message_count(&topic_name) {
+            Ok(count) if count > 0 => {
+                let status = if count >= dlq_threshold {
+                    NodeStatus::Warning
+                } else {
+                    NodeStatus::Healthy
+                };
+                metrics.push(NodeMetrics {
+                    node_id: node.id.clone(),
+                    status: status.clone(),
+                    message: format!("{count} messages in DLQ"),
+                    last_checked: now.clone(),
+                });
+                if count >= dlq_threshold {
+                    issues.push(DiagnosticIssue {
+                        severity: if count >= dlq_threshold * 10 {
+                            IssueSeverity::Critical
+                        } else {
+                            IssueSeverity::Warning
+                        },
+                        category: "data_flow".into(),
+                        title: format!("DLQ non-empty: {topic_name}"),
+                        description: format!("{count} messages in dead letter queue"),
+                        affected_nodes: vec![node.id.clone()],
+                        suggestions: vec![
+                            "Investigate failed messages in DLQ".into(),
+                            "Fix the root cause, then replay DLQ to target topic".into(),
+                        ],
+                    });
+                }
+            }
+            Ok(_) => {
+                metrics.push(NodeMetrics {
+                    node_id: node.id.clone(),
+                    status: NodeStatus::Healthy,
+                    message: "DLQ empty".into(),
+                    last_checked: now.clone(),
+                });
+            }
+            Err(_) => {}
+        }
+    }
+
+    // Check consumer lag for Kafka topic nodes
+    for node in nodes.iter().filter(|n| n.node_type == NodeType::KafkaTopic) {
+        let topic_name = match &node.config {
+            crate::types::NodeConfig::KafkaTopic { topic_name, .. } => topic_name.clone(),
+            _ => continue,
+        };
+
+        if topic_name.is_empty() {
+            continue;
+        }
+
+        match client.list_consumer_groups_for_topic(&topic_name) {
+            Ok(groups) => {
+                for group in &groups {
+                    if group.total_lag >= lag_critical {
+                        issues.push(DiagnosticIssue {
+                            severity: IssueSeverity::Critical,
+                            category: "data_flow".into(),
+                            title: format!("Critical consumer lag: {}", group.group_id),
+                            description: format!(
+                                "Consumer group {} has lag of {} on topic {}",
+                                group.group_id, group.total_lag, topic_name
+                            ),
+                            affected_nodes: vec![node.id.clone()],
+                            suggestions: vec![
+                                "Check consumer health and throughput".into(),
+                                "Consider increasing parallelism".into(),
+                            ],
+                        });
+                    } else if group.total_lag >= lag_warning {
+                        issues.push(DiagnosticIssue {
+                            severity: IssueSeverity::Warning,
+                            category: "data_flow".into(),
+                            title: format!("High consumer lag: {}", group.group_id),
+                            description: format!(
+                                "Consumer group {} has lag of {} on topic {}",
+                                group.group_id, group.total_lag, topic_name
+                            ),
+                            affected_nodes: vec![node.id.clone()],
+                            suggestions: vec!["Monitor lag trend -- may need scaling".into()],
+                        });
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
+}
+
 fn chrono_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

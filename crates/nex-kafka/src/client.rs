@@ -10,8 +10,8 @@ use rdkafka::TopicPartitionList;
 use crate::error::KafkaError;
 use crate::filter::matches_filter;
 use crate::models::{
-    ConsumeOptions, KafkaConfig, PartitionOffsets, RawMessage, ReplayOptions, ReplayReport,
-    TopicInfo,
+    ConsumerGroupInfo, ConsumeOptions, KafkaConfig, PartitionOffsets, RawMessage, ReplayOptions,
+    ReplayReport, TopicInfo,
 };
 
 /// Kafka client for topic inspection, message consumption, and production.
@@ -247,6 +247,112 @@ impl KafkaClient {
         }
 
         Ok(messages)
+    }
+
+    /// Get estimated message count for a topic (sum of watermark deltas).
+    pub fn get_topic_message_count(&self, topic: &str) -> Result<i64, KafkaError> {
+        let consumer: BaseConsumer = self
+            .base_config()
+            .set("group.id", "nexstudio-count")
+            .create()?;
+
+        let metadata = consumer
+            .fetch_metadata(Some(topic), Duration::from_secs(5))
+            .map_err(|e| KafkaError::Client(e.to_string()))?;
+
+        let topic_meta = metadata
+            .topics()
+            .first()
+            .ok_or_else(|| KafkaError::Client(format!("Topic '{topic}' not found")))?;
+
+        let mut total: i64 = 0;
+        for p in topic_meta.partitions() {
+            if let Ok((low, high)) = consumer.fetch_watermarks(topic, p.id(), Duration::from_secs(3))
+            {
+                total += high - low;
+            }
+        }
+        Ok(total)
+    }
+
+    /// List consumer groups and their lag for a given topic.
+    ///
+    /// Uses group metadata from the broker. Returns groups that have committed
+    /// offsets for the specified topic.
+    pub fn list_consumer_groups_for_topic(
+        &self,
+        topic: &str,
+    ) -> Result<Vec<ConsumerGroupInfo>, KafkaError> {
+        let consumer: BaseConsumer = self
+            .base_config()
+            .set("group.id", "nexstudio-lag-check")
+            .create()?;
+
+        // Get topic watermarks for lag calculation
+        let metadata = consumer
+            .fetch_metadata(Some(topic), Duration::from_secs(5))
+            .map_err(|e| KafkaError::Client(e.to_string()))?;
+
+        let topic_meta = metadata
+            .topics()
+            .first()
+            .ok_or_else(|| KafkaError::Client(format!("Topic '{topic}' not found")))?;
+
+        let mut high_watermarks: Vec<(i32, i64)> = Vec::new();
+        for p in topic_meta.partitions() {
+            if let Ok((_, high)) = consumer.fetch_watermarks(topic, p.id(), Duration::from_secs(3))
+            {
+                high_watermarks.push((p.id(), high));
+            }
+        }
+
+        // List all consumer groups from the broker
+        let group_list = consumer
+            .fetch_group_list(None, Duration::from_secs(5))
+            .map_err(|e| KafkaError::Client(e.to_string()))?;
+
+        let mut results = Vec::new();
+
+        for group in group_list.groups() {
+            let group_id = group.name().to_string();
+            if group_id.starts_with("nexstudio-") {
+                continue; // Skip our own internal groups
+            }
+
+            // Check if this group has committed offsets for our topic
+            let mut tpl = TopicPartitionList::new();
+            for &(pid, _) in &high_watermarks {
+                tpl.add_partition(topic, pid);
+            }
+
+            let committed = consumer
+                .committed_offsets(tpl, Duration::from_secs(3));
+
+            if let Ok(committed_tpl) = committed {
+                let mut total_lag: i64 = 0;
+                let mut has_offsets = false;
+
+                for &(pid, high) in &high_watermarks {
+                    if let Some(elem) = committed_tpl.find_partition(topic, pid) {
+                        if let Offset::Offset(committed_offset) = elem.offset() {
+                            total_lag += high - committed_offset;
+                            has_offsets = true;
+                        }
+                    }
+                }
+
+                if has_offsets {
+                    results.push(ConsumerGroupInfo {
+                        group_id,
+                        topic: topic.to_string(),
+                        total_lag,
+                        state: group.state().to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     /// Replay messages from source topic to target topic.

@@ -42,6 +42,7 @@ pub fn write_operator(
             join_type,
             on,
             within,
+            ..
         } => write_join(out, left, right, join_type, on, within.as_deref(), step_idx),
         ProcessStatement::Enrich { target, lookups } => {
             write_enrich(out, target, lookups, prev_stream)
@@ -57,6 +58,11 @@ pub fn write_operator(
             prev_stream.to_string()
         }
         // Complex statements pass through as comments
+        ProcessStatement::Detect { name, .. } => {
+            writeln!(out, "        // CEP detect: {name} (codegen not yet implemented)").unwrap();
+            writeln!(out).unwrap();
+            prev_stream.to_string()
+        }
         ProcessStatement::Branch { raw }
         | ProcessStatement::Correlation { raw }
         | ProcessStatement::Completion { raw } => {
