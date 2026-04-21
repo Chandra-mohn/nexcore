@@ -8,7 +8,11 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::TopicPartitionList;
 
 use crate::error::KafkaError;
-use crate::models::{ConsumeOptions, KafkaConfig, PartitionOffsets, RawMessage, TopicInfo};
+use crate::filter::matches_filter;
+use crate::models::{
+    ConsumeOptions, KafkaConfig, PartitionOffsets, RawMessage, ReplayOptions, ReplayReport,
+    TopicInfo,
+};
 
 /// Kafka client for topic inspection, message consumption, and production.
 ///
@@ -243,6 +247,160 @@ impl KafkaClient {
         }
 
         Ok(messages)
+    }
+
+    /// Replay messages from source topic to target topic.
+    ///
+    /// Consumes from source with optional offset/filter, produces to target
+    /// with optional rate limiting. Returns a report with counts.
+    pub fn replay(&self, options: &ReplayOptions) -> Result<ReplayReport, KafkaError> {
+        let start = std::time::Instant::now();
+
+        // Set up consumer
+        let consumer: BaseConsumer = self
+            .base_config()
+            .set("group.id", "nexstudio-replay")
+            .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "false")
+            .create()?;
+
+        let metadata = consumer
+            .fetch_metadata(Some(&options.source_topic), Duration::from_secs(10))
+            .map_err(|e| KafkaError::Client(e.to_string()))?;
+
+        let topic_meta = metadata.topics().first().ok_or_else(|| {
+            KafkaError::Client(format!("Topic '{}' not found", options.source_topic))
+        })?;
+
+        let mut tpl = TopicPartitionList::new();
+        let partitions: Vec<i32> = if let Some(p) = options.partition {
+            vec![p]
+        } else {
+            topic_meta.partitions().iter().map(|p| p.id()).collect()
+        };
+
+        for p in &partitions {
+            let offset = match options.offset.as_str() {
+                "earliest" => Offset::Beginning,
+                "latest" => Offset::End,
+                s => {
+                    let n: i64 = s
+                        .parse()
+                        .map_err(|_| KafkaError::Config(format!("Invalid offset: {s}")))?;
+                    Offset::Offset(n)
+                }
+            };
+            tpl.add_partition_offset(&options.source_topic, *p, offset)
+                .map_err(|e| KafkaError::Client(e.to_string()))?;
+        }
+
+        consumer
+            .assign(&tpl)
+            .map_err(|e| KafkaError::Consumer(e.to_string()))?;
+
+        // Set up producer (unless dry run)
+        let producer: Option<BaseProducer> = if options.dry_run {
+            None
+        } else {
+            Some(self.base_config().create()?)
+        };
+
+        let timeout = Duration::from_millis(options.timeout_ms);
+        let deadline = std::time::Instant::now() + timeout;
+        let max_msgs = options.limit.unwrap_or(usize::MAX);
+        let rate_delay = options
+            .rate_limit
+            .map(|r| Duration::from_micros(1_000_000 / u64::from(r.max(1))));
+
+        let mut consumed: usize = 0;
+        let mut produced: usize = 0;
+        let mut filtered: usize = 0;
+        let mut errors: usize = 0;
+        let mut batch_count: usize = 0;
+
+        while consumed < max_msgs && std::time::Instant::now() < deadline {
+            match consumer.poll(Duration::from_millis(500)) {
+                Some(Ok(msg)) => {
+                    consumed += 1;
+
+                    // Apply filter if configured
+                    if let Some(filter) = &options.filter {
+                        if let Some(payload) = msg.payload() {
+                            if let Ok(json_str) = std::str::from_utf8(payload) {
+                                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                    if !matches_filter(&json_val, filter) {
+                                        filtered += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Produce to target
+                    if let Some(ref prod) = producer {
+                        let payload = msg.payload().unwrap_or(&[]);
+                        let mut record = BaseRecord::to(&options.target_topic).payload(payload);
+                        if let Some(key) = msg.key() {
+                            if let Ok(k) = std::str::from_utf8(key) {
+                                record = record.key(k);
+                            }
+                        }
+
+                        match prod.send(record) {
+                            Ok(()) => {
+                                produced += 1;
+                                batch_count += 1;
+                            }
+                            Err((e, _)) => {
+                                errors += 1;
+                                eprintln!("[replay] produce error: {e}");
+                            }
+                        }
+
+                        // Flush batch
+                        if batch_count >= options.batch_size {
+                            prod.flush(Duration::from_secs(5))
+                                .map_err(|e| KafkaError::Producer(format!("Flush failed: {e}")))?;
+                            batch_count = 0;
+                        }
+
+                        // Rate limiting
+                        if let Some(delay) = rate_delay {
+                            std::thread::sleep(delay);
+                        }
+                    } else {
+                        // Dry run -- count as "would produce"
+                        produced += 1;
+                    }
+                }
+                Some(Err(e)) => {
+                    errors += 1;
+                    eprintln!("[replay] consume error: {e}");
+                }
+                None => {
+                    // No more messages within poll interval -- check if we've hit the end
+                    if std::time::Instant::now() + Duration::from_secs(1) > deadline {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Final flush
+        if let Some(ref prod) = producer {
+            prod.flush(Duration::from_secs(10))
+                .map_err(|e| KafkaError::Producer(format!("Final flush failed: {e}")))?;
+        }
+
+        Ok(ReplayReport {
+            consumed,
+            produced,
+            filtered,
+            errors,
+            dry_run: options.dry_run,
+            duration_ms: start.elapsed().as_millis() as u64,
+        })
     }
 
     /// Produce a single message to a topic. Returns the partition it was sent to.

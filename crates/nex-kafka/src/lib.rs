@@ -11,6 +11,6 @@ pub use error::KafkaError;
 pub use filter::matches_filter;
 pub use models::{
     ConsumeOptions, DecodedMessage, KafkaConfig, MessageFilter, PartitionOffsets, PiiConfig,
-    PiiPatternDef, RawMessage, TopicInfo,
+    PiiPatternDef, RawMessage, ReplayOptions, ReplayReport, TopicInfo,
 };
 pub use pii::PiiMasker;

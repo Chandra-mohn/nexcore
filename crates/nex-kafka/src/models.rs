@@ -70,6 +70,32 @@ pub struct DecodedMessage {
     pub size_bytes: usize,
 }
 
+/// Options for replaying messages between topics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayOptions {
+    pub source_topic: String,
+    pub target_topic: String,
+    pub offset: String,           // "earliest", "latest", or numeric
+    pub limit: Option<usize>,     // max messages (None = all available)
+    pub partition: Option<i32>,   // None = all partitions
+    pub filter: Option<MessageFilter>,
+    pub rate_limit: Option<u32>,  // messages per second (None = unlimited)
+    pub batch_size: usize,        // produce batch size (default 100)
+    pub dry_run: bool,            // if true, consume but don't produce
+    pub timeout_ms: u64,          // consume poll timeout
+}
+
+/// Result of a replay operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayReport {
+    pub consumed: usize,
+    pub produced: usize,
+    pub filtered: usize,
+    pub errors: usize,
+    pub dry_run: bool,
+    pub duration_ms: u64,
+}
+
 /// PII masking configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiiConfig {
