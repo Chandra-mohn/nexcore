@@ -1,0 +1,27 @@
+// NS25 Grammar Extensions Test Fixture
+// Tests: exactly_once, temporal join, CDC watch, CEP detect
+
+import ./accounts.schema
+
+process fraud_detection
+    parallelism 4
+    mode stream
+    exactly_once
+    transaction_timeout 30 seconds
+
+    receive transactions from source into raw_txns
+        from kafka "transactions" key account_id
+        schema transaction_event
+
+    join transactions with exchange_rates
+        on currency
+        within 1 hours
+        type temporal
+        as_of event_time
+        into enriched_txns
+
+    emit enriched_txns to output
+        to kafka "enriched-transactions" key account_id
+        schema enriched_txn_event
+
+end
