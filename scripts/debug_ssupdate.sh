@@ -117,7 +117,7 @@ echo "=========================================="
 echo "TEST 14: Small slice test -- first 500 lines of preprocessed"
 echo "=========================================="
 head -500 /tmp/ss_fixed.cbl > /tmp/ss_500.cbl
-$NEXMIG parse /tmp/ss_500.cbl --format json 2>/dev/null | head -10
+$NEXMIG parse -f fixed /tmp/ss_500.cbl --format json 2>/dev/null | head -10
 echo ""
 
 echo "=========================================="
@@ -125,8 +125,8 @@ echo "TEST 15: Progressively larger slices"
 echo "=========================================="
 for N in 100 200 500 1000 2000 5000 10000; do
     head -$N /tmp/ss_fixed.cbl > /tmp/ss_slice.cbl
-    RESULT=$($NEXMIG parse /tmp/ss_slice.cbl --format json 2>/dev/null | grep -c "procedure_division")
-    PROC=$($NEXMIG parse /tmp/ss_slice.cbl --format json 2>/dev/null | grep -c "paragraphs")
+    RESULT=$($NEXMIG parse -f fixed /tmp/ss_slice.cbl --format json 2>/dev/null | grep -c "procedure_division")
+    PROC=$($NEXMIG parse -f fixed /tmp/ss_slice.cbl --format json 2>/dev/null | grep -c "paragraphs")
     echo "  ${N} lines: procedure_division=${RESULT}, paragraphs=${PROC}"
 done
 echo ""
