@@ -308,9 +308,9 @@ fn split_data_division_into_chunks(data_text: &str, batch_size: usize) -> Vec<St
     chunks
 }
 
-/// Wrap a DATA DIVISION text chunk in a minimal COBOL program skeleton
-/// so ANTLR4 can parse it via `startRule`.
-fn wrap_chunk_as_program(chunk: &str) -> String {
+/// Wrap a DATA DIVISION text chunk with `DATA DIVISION.` header
+/// so the `dataDivision()` sub-rule parser can parse it directly.
+fn wrap_data_chunk(chunk: &str) -> String {
     let upper = chunk.trim_start().to_uppercase();
     let needs_section = !upper.starts_with("WORKING-STORAGE SECTION")
         && !upper.starts_with("LINKAGE SECTION")
@@ -323,9 +323,7 @@ fn wrap_chunk_as_program(chunk: &str) -> String {
         ""
     };
 
-    format!(
-        "IDENTIFICATION DIVISION.\nPROGRAM-ID. CHUNK.\nDATA DIVISION.\n{section_prefix}{chunk}\nPROCEDURE DIVISION.\n    STOP RUN.\n"
-    )
+    format!("DATA DIVISION.\n{section_prefix}{chunk}")
 }
 
 /// Parse DATA DIVISION by splitting into chunks at 01-level boundaries.
@@ -343,8 +341,8 @@ fn parse_data_chunks(data_text: &str, batch_size: usize) -> Vec<DataEntry> {
         .into_par_iter()
         .enumerate()
         .map(|(i, chunk)| {
-            let wrapped = wrap_chunk_as_program(&chunk);
-            match run_data_listener(&wrapped) {
+            let wrapped = wrap_data_chunk(&chunk);
+            match run_data_listener_direct(&wrapped) {
                 Ok(listener) => {
                     for d in &listener.diagnostics {
                         tracing::warn!(severity = %d.severity, category = %d.category, "{}", d.message);
@@ -439,12 +437,10 @@ fn split_proc_division_into_chunks(proc_text: &str, sections_per_chunk: usize) -
     chunks
 }
 
-/// Wrap a PROCEDURE DIVISION chunk in a minimal COBOL program skeleton
-/// so ANTLR4 can parse it as a complete program.
-fn wrap_proc_chunk_as_program(chunk: &str) -> String {
-    format!(
-        "IDENTIFICATION DIVISION.\nPROGRAM-ID. CHUNK.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\nPROCEDURE DIVISION.\n{chunk}"
-    )
+/// Wrap a PROCEDURE DIVISION chunk with the `PROCEDURE DIVISION.` header
+/// so the `procedureDivision()` sub-rule parser can parse it directly.
+fn wrap_proc_chunk(chunk: &str) -> String {
+    format!("PROCEDURE DIVISION.\n{chunk}")
 }
 
 /// Parse PROCEDURE DIVISION by splitting into chunks at SECTION boundaries
@@ -465,8 +461,8 @@ fn parse_proc_chunks(
         .into_par_iter()
         .enumerate()
         .map(|(i, chunk)| {
-            let wrapped = wrap_proc_chunk_as_program(&chunk);
-            match run_proc_listener_with_errors(&wrapped) {
+            let wrapped = wrap_proc_chunk(&chunk);
+            match run_proc_listener_direct(&wrapped) {
                 Ok((listener, token_errors)) => {
                     // Drain thread-local diagnostics collected during statement extraction
                     let diags = proc_listener::drain_diagnostics();
@@ -646,7 +642,7 @@ fn parse_proc_division_isolated(
             "large PROCEDURE DIVISION -- using chunked parallel parsing"
         );
         // Strip the PROCEDURE DIVISION header line for chunking --
-        // the header is on the first line, each chunk gets its own via wrap_proc_chunk_as_program
+        // the header is on the first line, each chunk gets its own via wrap_proc_chunk
         let body = proc_text
             .lines()
             .skip(1)
@@ -687,6 +683,8 @@ fn parse_proc_division_isolated(
 
 /// Run ANTLR4 parse and walk with `ProcedureDivisionListener`, also collecting
 /// token recognition errors from the lexer and parser.
+///
+/// Uses `startRule()` entry point -- the source must be a complete COBOL program.
 fn run_proc_listener_with_errors(
     source: &str,
 ) -> Result<(ProcedureDivisionListener, Vec<TokenError>)> {
@@ -712,6 +710,63 @@ fn run_proc_listener_with_errors(
     listener.diagnostics = proc_listener::drain_diagnostics();
 
     Ok((listener, error_store.drain()))
+}
+
+/// Run ANTLR4 parse using `procedureDivision()` sub-rule entry point.
+///
+/// Faster than `run_proc_listener_with_errors` because it skips parsing
+/// fake IDENTIFICATION/DATA divisions. The source must start with
+/// `PROCEDURE DIVISION`.
+fn run_proc_listener_direct(
+    source: &str,
+) -> Result<(ProcedureDivisionListener, Vec<TokenError>)> {
+    let error_store = ErrorStore::new();
+
+    let input: InputStream<&str> = InputStream::new(source);
+    let mut lexer = Cobol85Lexer::new(input);
+    lexer.remove_error_listeners();
+    lexer.add_error_listener(Box::new(ErrorCollector::new(&error_store)));
+    let token_stream = CommonTokenStream::new(lexer);
+    let mut parser = Cobol85Parser::new(token_stream);
+    parser.remove_error_listeners();
+    parser.add_error_listener(Box::new(ErrorCollector::new(&error_store)));
+
+    let tree = parser.procedureDivision().map_err(|e| TranspileError::AntlrError {
+        message: format!("{e:?}"),
+    })?;
+
+    let listener = Box::new(ProcedureDivisionListener::new());
+    let mut listener = *Cobol85TreeWalker::walk(listener, &*tree);
+
+    listener.diagnostics = proc_listener::drain_diagnostics();
+
+    Ok((listener, error_store.drain()))
+}
+
+/// Run ANTLR4 parse using `dataDivision()` sub-rule entry point.
+///
+/// Faster than `run_data_listener` because it skips parsing the full
+/// program. The source must start with `DATA DIVISION`.
+fn run_data_listener_direct(source: &str) -> Result<DataDivisionListener> {
+    let error_store = ErrorStore::new();
+
+    let input: InputStream<&str> = InputStream::new(source);
+    let mut lexer = Cobol85Lexer::new(input);
+    lexer.remove_error_listeners();
+    lexer.add_error_listener(Box::new(ErrorCollector::new(&error_store)));
+    let token_stream = CommonTokenStream::new(lexer);
+    let mut parser = Cobol85Parser::new(token_stream);
+    parser.remove_error_listeners();
+    parser.add_error_listener(Box::new(ErrorCollector::new(&error_store)));
+
+    let tree = parser.dataDivision().map_err(|e| TranspileError::AntlrError {
+        message: format!("{e:?}"),
+    })?;
+
+    let listener = Box::new(DataDivisionListener::new());
+    let listener = Cobol85TreeWalker::walk(listener, &*tree);
+
+    Ok(*listener)
 }
 
 /// Run ANTLR4 parse and walk with `DataDivisionListener`.
@@ -1374,11 +1429,12 @@ WORKING-STORAGE SECTION.
     }
 
     #[test]
-    fn wrap_chunk_with_section() {
+    fn wrap_data_chunk_with_section() {
         let chunk = "WORKING-STORAGE SECTION.\n01  REC PIC X(5).\n";
-        let wrapped = wrap_chunk_as_program(chunk);
-        assert!(wrapped.contains("IDENTIFICATION DIVISION"), "has ID division");
-        assert!(wrapped.contains("PROCEDURE DIVISION"), "has PROC division");
+        let wrapped = wrap_data_chunk(chunk);
+        assert!(wrapped.starts_with("DATA DIVISION."), "starts with DATA DIVISION");
+        assert!(!wrapped.contains("IDENTIFICATION DIVISION"), "no ID division");
+        assert!(!wrapped.contains("PROCEDURE DIVISION"), "no PROC division");
         // Should NOT duplicate WORKING-STORAGE SECTION
         assert_eq!(
             wrapped.matches("WORKING-STORAGE SECTION").count(),
@@ -1388,11 +1444,11 @@ WORKING-STORAGE SECTION.
     }
 
     #[test]
-    fn wrap_chunk_without_section() {
+    fn wrap_data_chunk_without_section() {
         let chunk = "01  REC PIC X(5).\n";
-        let wrapped = wrap_chunk_as_program(chunk);
+        let wrapped = wrap_data_chunk(chunk);
         assert!(wrapped.contains("WORKING-STORAGE SECTION"), "adds WS section header");
-        assert!(wrapped.contains("IDENTIFICATION DIVISION"), "has ID division");
+        assert!(wrapped.starts_with("DATA DIVISION."), "starts with DATA DIVISION");
     }
 
     #[test]
@@ -1489,11 +1545,11 @@ SECOND-PARA.
     }
 
     #[test]
-    fn wrap_proc_chunk() {
+    fn wrap_proc_chunk_test() {
         let chunk = "TEST-SECTION SECTION.\nTEST-PARA.\n    DISPLAY 'HI'.\n";
-        let wrapped = wrap_proc_chunk_as_program(chunk);
-        assert!(wrapped.contains("IDENTIFICATION DIVISION"), "has ID division");
-        assert!(wrapped.contains("PROCEDURE DIVISION"), "has PROC division");
+        let wrapped = wrap_proc_chunk(chunk);
+        assert!(wrapped.starts_with("PROCEDURE DIVISION."), "starts with PROC DIVISION");
+        assert!(!wrapped.contains("IDENTIFICATION DIVISION"), "no ID division");
         assert!(wrapped.contains("TEST-SECTION SECTION"), "has the section");
     }
 
