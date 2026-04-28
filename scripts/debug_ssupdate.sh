@@ -139,11 +139,19 @@ echo "Total preprocessed lines: $TOTAL_LINES"
 echo "Proc division lines: $(( TOTAL_LINES - PROC_LINE ))"
 echo ""
 # Build a minimal program header + proc division slices of increasing size
-HEADER="IDENTIFICATION DIVISION.\nPROGRAM-ID. SLICE.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\n"
 for N in 500 2000 10000 50000; do
-    printf "$HEADER" > /tmp/ss_slice.cbl
+    # Extract proc division slice and wrap in minimal program
+    cat > /tmp/ss_slice.cbl <<HEREDOC
+IDENTIFICATION DIVISION.
+PROGRAM-ID. SLICE.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 FILLER PIC X.
+HEREDOC
     tail -n +$PROC_LINE /tmp/ss_fixed.cbl | head -$N >> /tmp/ss_slice.cbl
     SLICE_LINES=$(wc -l < /tmp/ss_slice.cbl)
+    echo "  --- Slice ${N}: first 3 proc lines ---"
+    tail -n +$PROC_LINE /tmp/ss_fixed.cbl | head -3
     ST=$(date +%s)
     $NEXMIG parse -f fixed /tmp/ss_slice.cbl --format json > /tmp/ss_slice.json 2>/dev/null
     SECTIONS=$(grep -c '"paragraphs"' /tmp/ss_slice.json)
