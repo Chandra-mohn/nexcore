@@ -29,9 +29,10 @@ $NEXMIG diagnose format "$SRC"
 echo ""
 
 echo "=========================================="
-echo "TEST 3: Token errors on raw source"
+echo "TEST 3: Token errors on raw source (SKIPPED -- redundant with Test 8 stderr)"
 echo "=========================================="
-$NEXMIG diagnose tokens $COPY_ARGS "$SRC"
+# Skipped: runs a full monolithic ANTLR parse on raw source (~70 min on SSUPDATE).
+# Token errors are captured in Test 8 via stderr instead.
 echo ""
 
 echo "=========================================="
