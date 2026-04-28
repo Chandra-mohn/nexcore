@@ -17,6 +17,7 @@ miette = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+rayon = { workspace = true }
 
 [features]
 compile_tests = []

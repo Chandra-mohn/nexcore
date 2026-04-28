@@ -799,6 +799,7 @@ version = "0.3.0"
 dependencies = [
  "antlr-rust",
  "miette",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",

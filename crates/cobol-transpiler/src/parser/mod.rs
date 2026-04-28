@@ -21,8 +21,9 @@ pub mod preprocess;
 pub(crate) mod proc_listener;
 pub mod sql_extract;
 
-use crate::ast::{CobolProgram, DataDivision, DataEntry, ExecSqlStatement, FileDescription, ProcedureDivision, SqlStatementType, Statement};
+use crate::ast::{CobolProgram, DataDivision, DataEntry, ExecSqlStatement, FileDescription, Paragraph, ProcedureDivision, Section, SqlStatementType, Statement};
 use crate::diagnostics::TranspileDiagnostic;
+use rayon::prelude::*;
 use crate::error::{Result, TranspileError};
 use crate::generated::cobol85lexer::Cobol85Lexer;
 use crate::generated::cobol85listener::Cobol85Listener;
@@ -282,13 +283,8 @@ pub fn parse_cobol_with_format(
 /// Extracts just the PROCEDURE DIVISION text and parses it independently.
 fn parse_proc_resilient(input: &str) -> (Option<ProcedureDivision>, Vec<TranspileDiagnostic>) {
     match parse_proc_division_isolated(input) {
-        Ok((pd, diags, _token_errors)) => {
-            eprintln!("[DEBUG parse_proc_resilient] result: pd={}, diags={}",
-                if pd.is_some() { "Some" } else { "None" }, diags.len());
-            (pd, diags)
-        }
+        Ok((pd, diags, _token_errors)) => (pd, diags),
         Err(e) => {
-            eprintln!("[DEBUG parse_proc_resilient] ERROR: {e}");
             tracing::warn!(error = %e, "Isolated PROCEDURE DIVISION parse failed");
             (None, Vec::new())
         }
@@ -546,6 +542,144 @@ fn parse_data_chunks(data_text: &str, batch_size: usize) -> Vec<DataEntry> {
     all_items
 }
 
+/// Size threshold (in bytes) above which procedure division parsing uses
+/// chunked + parallel mode instead of monolithic ANTLR parse.
+const PROC_CHUNK_THRESHOLD: usize = 500_000; // ~500KB
+
+/// Default number of COBOL sections per chunk when splitting the procedure
+/// division for parallel parsing.
+const PROC_SECTIONS_PER_CHUNK: usize = 50;
+
+/// Split PROCEDURE DIVISION text at SECTION boundaries.
+///
+/// Groups `sections_per_chunk` consecutive sections into each chunk.
+/// Lines before the first SECTION header (standalone paragraphs at the
+/// top of the procedure division) go into the first chunk.
+///
+/// The PROCEDURE DIVISION header line itself is NOT included -- the caller
+/// must prepend it when wrapping each chunk.
+fn split_proc_division_into_chunks(proc_text: &str, sections_per_chunk: usize) -> Vec<String> {
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current_chunk = String::new();
+    let mut section_count: usize = 0;
+
+    for line in proc_text.lines() {
+        let trimmed = line.trim();
+        let upper = trimmed.to_uppercase();
+
+        // Detect SECTION headers: "SOME-NAME SECTION." or "SOME-NAME SECTION"
+        // but NOT "PROCEDURE DIVISION" or "WORKING-STORAGE SECTION" etc.
+        let is_section_header = (upper.ends_with("SECTION.")
+            || upper.ends_with("SECTION"))
+            && !upper.contains("DIVISION")
+            && !upper.starts_with("WORKING-STORAGE")
+            && !upper.starts_with("LINKAGE")
+            && !upper.starts_with("LOCAL-STORAGE")
+            && !upper.starts_with("FILE")
+            && !upper.starts_with("INPUT-OUTPUT")
+            && !upper.starts_with("CONFIGURATION");
+
+        if is_section_header {
+            if section_count >= sections_per_chunk && !current_chunk.trim().is_empty() {
+                chunks.push(std::mem::take(&mut current_chunk));
+                section_count = 0;
+            }
+            section_count += 1;
+        }
+
+        current_chunk.push_str(line);
+        current_chunk.push('\n');
+    }
+
+    // Flush remaining
+    if !current_chunk.trim().is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    chunks
+}
+
+/// Wrap a PROCEDURE DIVISION chunk in a minimal COBOL program skeleton
+/// so ANTLR4 can parse it as a complete program.
+fn wrap_proc_chunk_as_program(chunk: &str) -> String {
+    format!(
+        "IDENTIFICATION DIVISION.\nPROGRAM-ID. CHUNK.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\nPROCEDURE DIVISION.\n{chunk}"
+    )
+}
+
+/// Parse PROCEDURE DIVISION by splitting into chunks at SECTION boundaries
+/// and parsing each chunk in parallel with rayon.
+///
+/// Returns merged (sections, standalone_paragraphs, diagnostics, token_errors).
+fn parse_proc_chunks(
+    proc_text: &str,
+    sections_per_chunk: usize,
+) -> (Vec<Section>, Vec<Paragraph>, Vec<TranspileDiagnostic>, Vec<TokenError>) {
+    let chunks = split_proc_division_into_chunks(proc_text, sections_per_chunk);
+    let total_chunks = chunks.len();
+
+    tracing::info!(chunks = total_chunks, "PROCEDURE DIVISION chunked parsing starting");
+
+    // Parse each chunk in parallel
+    let results: Vec<_> = chunks
+        .into_par_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let wrapped = wrap_proc_chunk_as_program(&chunk);
+            match run_proc_listener_with_errors(&wrapped) {
+                Ok((listener, token_errors)) => {
+                    // Drain thread-local diagnostics collected during statement extraction
+                    let diags = proc_listener::drain_diagnostics();
+                    tracing::debug!(
+                        chunk = i + 1,
+                        total = total_chunks,
+                        sections = listener.sections.len(),
+                        paragraphs = listener.paragraphs.len(),
+                        "proc chunk parsed"
+                    );
+                    (listener.sections, listener.paragraphs, diags, token_errors)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        chunk = i + 1,
+                        total = total_chunks,
+                        error = %e,
+                        "PROCEDURE DIVISION chunk parse failed"
+                    );
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+                }
+            }
+        })
+        .collect();
+
+    // Merge results in order
+    let mut all_sections = Vec::new();
+    let mut all_paragraphs = Vec::new();
+    let mut all_diagnostics = Vec::new();
+    let mut all_token_errors = Vec::new();
+    let mut success_count = 0;
+
+    for (sections, paragraphs, diags, errors) in results {
+        if !sections.is_empty() || !paragraphs.is_empty() {
+            success_count += 1;
+        }
+        all_sections.extend(sections);
+        all_paragraphs.extend(paragraphs);
+        all_diagnostics.extend(diags);
+        all_token_errors.extend(errors);
+    }
+
+    tracing::info!(
+        success = success_count,
+        total = total_chunks,
+        sections = all_sections.len(),
+        paragraphs = all_paragraphs.len(),
+        "PROCEDURE DIVISION chunked parsing complete"
+    );
+
+    (all_sections, all_paragraphs, all_diagnostics, all_token_errors)
+}
+
 /// Extract FILE SECTION text (from FILE SECTION through WORKING-STORAGE or
 /// LINKAGE or PROCEDURE DIVISION) for isolated parsing.
 ///
@@ -621,102 +755,92 @@ fn parse_file_section_isolated(source: &str) -> Vec<FileDescription> {
     }
 }
 
-/// Extract the PROCEDURE DIVISION text from source and wrap it in a minimal
-/// program skeleton so it can be parsed independently by ANTLR.
+/// Extract raw PROCEDURE DIVISION text from source (without wrapping).
 ///
-/// Returns `None` if no PROCEDURE DIVISION is found in the source.
-fn extract_proc_division_source(source: &str) -> Option<String> {
-    // Find the PROCEDURE DIVISION line (case-insensitive).
+/// Returns the text starting from the PROCEDURE DIVISION header line
+/// through end of source. Returns `None` if no PROCEDURE DIVISION found.
+fn extract_proc_division_text(source: &str) -> Option<String> {
     let upper = source.to_uppercase();
     let proc_pos = upper.find("PROCEDURE DIVISION")?;
-
-    // Find the start of the line containing PROCEDURE DIVISION.
     let line_start = source[..proc_pos].rfind('\n').map_or(0, |p| p + 1);
-
-    // Build a minimal wrapper so ANTLR can parse the procedure division.
     let proc_text = &source[line_start..];
-    let proc_line_count = proc_text.lines().count();
-    let first_10: String = proc_text.lines().take(10).collect::<Vec<_>>().join("\n");
-    eprintln!("[DEBUG extract_proc] source total lines: {}", source.lines().count());
-    eprintln!("[DEBUG extract_proc] PROCEDURE DIVISION found at byte offset {proc_pos}, line_start={line_start}");
-    eprintln!("[DEBUG extract_proc] proc_text lines: {proc_line_count}");
-    eprintln!("[DEBUG extract_proc] first 10 lines of proc_text:\n{first_10}");
 
-    let wrapped = format!(
-        "IDENTIFICATION DIVISION.\nPROGRAM-ID. ISOLATED-PROC.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\n{proc_text}"
+    tracing::debug!(
+        source_lines = source.lines().count(),
+        proc_offset = proc_pos,
+        proc_lines = proc_text.lines().count(),
+        "extracted PROCEDURE DIVISION text"
     );
-    eprintln!("[DEBUG extract_proc] wrapped total lines: {}", wrapped.lines().count());
 
-    // Dump isolated source for manual inspection when NEXMIG_DUMP_ISOLATED is set.
-    if std::env::var("NEXMIG_DUMP_ISOLATED").is_ok() {
-        let _ = std::fs::write("/tmp/ss_isolated_proc.cbl", &wrapped);
-        eprintln!("[DEBUG] Wrote isolated proc source to /tmp/ss_isolated_proc.cbl");
-    }
-
-    Some(wrapped)
+    Some(proc_text.to_string())
 }
 
-/// Attempt to parse PROCEDURE DIVISION in isolation when the full-source parse
-/// fails to extract any paragraphs. This handles the case where a large or
-/// malformed DATA DIVISION poisons the ANTLR parser state.
+/// Wrap raw PROCEDURE DIVISION text in a minimal COBOL program skeleton
+/// so ANTLR4 can parse it as a complete program.
+fn wrap_proc_as_program(proc_text: &str) -> String {
+    format!(
+        "IDENTIFICATION DIVISION.\nPROGRAM-ID. ISOLATED-PROC.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\n{proc_text}"
+    )
+}
+
+/// Attempt to parse PROCEDURE DIVISION in isolation.
+///
+/// For large procedure divisions (>{threshold} bytes), splits at SECTION
+/// boundaries and parses each chunk in parallel with rayon. For smaller
+/// inputs, uses a single monolithic ANTLR pass.
 fn parse_proc_division_isolated(
     source: &str,
 ) -> Result<(Option<ProcedureDivision>, Vec<TranspileDiagnostic>, Vec<TokenError>)> {
-    let isolated = match extract_proc_division_source(source) {
+    let proc_text = match extract_proc_division_text(source) {
         Some(s) => s,
-        None => {
-            eprintln!("[DEBUG parse_proc_isolated] extract_proc_division_source returned None");
-            return Ok((None, Vec::new(), Vec::new()));
-        }
+        None => return Ok((None, Vec::new(), Vec::new())),
     };
 
-    eprintln!("[DEBUG parse_proc_isolated] calling run_proc_listener_with_errors ({} chars)", isolated.len());
-    let (listener, token_errors) = run_proc_listener_with_errors(&isolated)?;
+    let proc_bytes = proc_text.len();
 
-    eprintln!("[DEBUG parse_proc_isolated] listener results: sections={}, paragraphs={}, diagnostics={}, token_errors={}",
-        listener.sections.len(), listener.paragraphs.len(), listener.diagnostics.len(), token_errors.len());
+    // Route to chunked or monolithic based on size
+    let (sections, paragraphs, diagnostics, token_errors) = if proc_bytes > PROC_CHUNK_THRESHOLD {
+        tracing::info!(
+            bytes = proc_bytes,
+            threshold = PROC_CHUNK_THRESHOLD,
+            "large PROCEDURE DIVISION -- using chunked parallel parsing"
+        );
+        // Strip the PROCEDURE DIVISION header line for chunking --
+        // the header is on the first line, each chunk gets its own via wrap_proc_chunk_as_program
+        let body = proc_text
+            .lines()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse_proc_chunks(&body, PROC_SECTIONS_PER_CHUNK)
+    } else {
+        // Small enough for monolithic parse
+        let wrapped = wrap_proc_as_program(&proc_text);
+        let (listener, token_errors) = run_proc_listener_with_errors(&wrapped)?;
+        let diags = proc_listener::drain_diagnostics();
+        (listener.sections, listener.paragraphs, diags, token_errors)
+    };
 
-    if !token_errors.is_empty() {
-        let show = token_errors.len().min(20);
-        for te in &token_errors[..show] {
-            eprintln!("[DEBUG parse_proc_isolated] token_error: line={} col={} text={:?} msg={:?}",
-                te.line, te.column, te.offending_text, te.message);
-        }
-        if token_errors.len() > 20 {
-            eprintln!("[DEBUG parse_proc_isolated] ... and {} more token errors", token_errors.len() - 20);
-        }
-    }
+    tracing::info!(
+        sections = sections.len(),
+        paragraphs = paragraphs.len(),
+        diagnostics = diagnostics.len(),
+        token_errors = token_errors.len(),
+        "PROCEDURE DIVISION parse complete"
+    );
 
-    if !listener.diagnostics.is_empty() {
-        let show = listener.diagnostics.len().min(20);
-        for d in &listener.diagnostics[..show] {
-            eprintln!("[DEBUG parse_proc_isolated] diag: line={} {:?} {:?}: {}",
-                d.line, d.severity, d.category, d.message);
-        }
-    }
-
-    if listener.sections.is_empty() && listener.paragraphs.is_empty() {
-        eprintln!("[DEBUG parse_proc_isolated] NO sections or paragraphs found -- returning None");
-        return Ok((None, listener.diagnostics, token_errors));
-    }
-
-    // Log what we found
-    for s in &listener.sections {
-        eprintln!("[DEBUG parse_proc_isolated] section: {} ({} paragraphs)", s.name, s.paragraphs.len());
-    }
-    for p in &listener.paragraphs {
-        let stmt_count: usize = p.sentences.iter().map(|s| s.statements.len()).sum();
-        eprintln!("[DEBUG parse_proc_isolated] standalone paragraph: {} ({} statements)", p.name, stmt_count);
+    if sections.is_empty() && paragraphs.is_empty() {
+        return Ok((None, diagnostics, token_errors));
     }
 
     Ok((
         Some(ProcedureDivision {
             using_params: Vec::new(),
             returning: None,
-            sections: listener.sections,
-            paragraphs: listener.paragraphs,
+            sections,
+            paragraphs,
         }),
-        listener.diagnostics,
+        diagnostics,
         token_errors,
     ))
 }
@@ -1478,5 +1602,110 @@ WORKING-STORAGE SECTION.
         let sub_levels = items.iter().filter(|e| e.level == 5).count();
         assert_eq!(top_levels, 4, "should find all 4 01-level records");
         assert_eq!(sub_levels, 4, "should find all 4 05-level fields");
+    }
+
+    // -----------------------------------------------------------------------
+    // Chunked PROCEDURE DIVISION parsing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn split_proc_chunks_basic() {
+        let proc_body = "\
+SSUPDATE-MAINLINE SECTION.
+MAIN-PARA.
+    MOVE 1 TO WS-A.
+PROCESS-DATA SECTION.
+DATA-PARA.
+    MOVE 2 TO WS-B.
+CLEANUP SECTION.
+CLEANUP-PARA.
+    STOP RUN.
+";
+        let chunks = split_proc_division_into_chunks(proc_body, 2);
+        // 3 sections with batch=2: chunk1=[SSUPDATE-MAINLINE + PROCESS-DATA], chunk2=[CLEANUP]
+        assert_eq!(chunks.len(), 2, "3 sections with batch=2 should produce 2 chunks");
+        assert!(chunks[0].contains("SSUPDATE-MAINLINE"), "chunk 0 has first section");
+        assert!(chunks[0].contains("PROCESS-DATA"), "chunk 0 has second section");
+        assert!(chunks[1].contains("CLEANUP"), "chunk 1 has third section");
+    }
+
+    #[test]
+    fn split_proc_chunks_one_per_chunk() {
+        let proc_body = "\
+SECTION-A SECTION.
+PARA-A.
+    DISPLAY 'A'.
+SECTION-B SECTION.
+PARA-B.
+    DISPLAY 'B'.
+SECTION-C SECTION.
+PARA-C.
+    DISPLAY 'C'.
+";
+        let chunks = split_proc_division_into_chunks(proc_body, 1);
+        assert_eq!(chunks.len(), 3, "3 sections with batch=1 should produce 3 chunks");
+        assert!(chunks[0].contains("SECTION-A"), "chunk 0");
+        assert!(chunks[1].contains("SECTION-B"), "chunk 1");
+        assert!(chunks[2].contains("SECTION-C"), "chunk 2");
+    }
+
+    #[test]
+    fn split_proc_chunks_standalone_paragraphs_first() {
+        // Paragraphs before first SECTION stay with the first chunk
+        let proc_body = "\
+INIT-PARA.
+    MOVE 0 TO WS-A.
+FIRST-SECTION SECTION.
+SECTION-PARA.
+    DISPLAY 'HELLO'.
+SECOND-SECTION SECTION.
+SECOND-PARA.
+    DISPLAY 'BYE'.
+";
+        let chunks = split_proc_division_into_chunks(proc_body, 1);
+        assert_eq!(chunks.len(), 2, "standalone para + 2 sections with batch=1 = 2 chunks");
+        assert!(chunks[0].contains("INIT-PARA"), "standalone para in first chunk");
+        assert!(chunks[0].contains("FIRST-SECTION"), "first section in first chunk with standalone para");
+        assert!(chunks[1].contains("SECOND-SECTION"), "second section in second chunk");
+    }
+
+    #[test]
+    fn wrap_proc_chunk() {
+        let chunk = "TEST-SECTION SECTION.\nTEST-PARA.\n    DISPLAY 'HI'.\n";
+        let wrapped = wrap_proc_chunk_as_program(chunk);
+        assert!(wrapped.contains("IDENTIFICATION DIVISION"), "has ID division");
+        assert!(wrapped.contains("PROCEDURE DIVISION"), "has PROC division");
+        assert!(wrapped.contains("TEST-SECTION SECTION"), "has the section");
+    }
+
+    #[test]
+    fn parse_proc_chunks_end_to_end() {
+        let source = "\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CHUNKPROC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A PIC X.
+       PROCEDURE DIVISION.
+       SECTION-A SECTION.
+       PARA-A1.
+           DISPLAY 'A1'.
+       PARA-A2.
+           DISPLAY 'A2'.
+       SECTION-B SECTION.
+       PARA-B1.
+           MOVE 'X' TO WS-A.
+";
+        let proc_text = extract_proc_division_text(source).unwrap();
+        // Strip the PROCEDURE DIVISION header line
+        let body: String = proc_text.lines().skip(1).collect::<Vec<_>>().join("\n");
+        let (sections, paragraphs, _diags, _errors) = parse_proc_chunks(&body, 1);
+
+        assert_eq!(sections.len(), 2, "should find 2 sections");
+        assert_eq!(sections[0].name, "SECTION-A", "first section name");
+        assert_eq!(sections[1].name, "SECTION-B", "second section name");
+        assert_eq!(sections[0].paragraphs.len(), 2, "SECTION-A has 2 paragraphs");
+        assert_eq!(sections[1].paragraphs.len(), 1, "SECTION-B has 1 paragraph");
+        assert!(paragraphs.is_empty(), "no standalone paragraphs");
     }
 }
