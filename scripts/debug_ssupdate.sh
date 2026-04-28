@@ -128,15 +128,27 @@ grep -n -A 20 '^FD ' /tmp/ss_fixed.cbl | head -30
 echo ""
 
 echo "=========================================="
-echo "TEST 13: Progressively larger slices"
+echo "TEST 13: Progressively larger proc division slices"
 echo "=========================================="
 T=$(date +%s)
-for N in 1000 5000 10000 50000; do
-    head -$N /tmp/ss_fixed.cbl > /tmp/ss_slice.cbl
+# Find the PROCEDURE DIVISION line number in preprocessed output
+PROC_LINE=$(grep -n "PROCEDURE DIVISION" /tmp/ss_fixed.cbl | head -1 | cut -d: -f1)
+echo "PROCEDURE DIVISION starts at line: $PROC_LINE"
+TOTAL_LINES=$(wc -l < /tmp/ss_fixed.cbl)
+echo "Total preprocessed lines: $TOTAL_LINES"
+echo "Proc division lines: $(( TOTAL_LINES - PROC_LINE ))"
+echo ""
+# Build a minimal program header + proc division slices of increasing size
+HEADER="IDENTIFICATION DIVISION.\nPROGRAM-ID. SLICE.\nDATA DIVISION.\nWORKING-STORAGE SECTION.\n01 FILLER PIC X.\n"
+for N in 500 2000 10000 50000; do
+    printf "$HEADER" > /tmp/ss_slice.cbl
+    tail -n +$PROC_LINE /tmp/ss_fixed.cbl | head -$N >> /tmp/ss_slice.cbl
+    SLICE_LINES=$(wc -l < /tmp/ss_slice.cbl)
     ST=$(date +%s)
-    RESULT=$($NEXMIG parse -f fixed /tmp/ss_slice.cbl --format json 2>/dev/null | grep -c "procedure_division")
-    PROC=$($NEXMIG parse -f fixed /tmp/ss_slice.cbl --format json 2>/dev/null | grep -c "paragraphs")
-    echo "  ${N} lines: procedure_division=${RESULT}, paragraphs=${PROC} $(elapsed $ST)"
+    $NEXMIG parse -f fixed /tmp/ss_slice.cbl --format json > /tmp/ss_slice.json 2>/dev/null
+    SECTIONS=$(grep -c '"paragraphs"' /tmp/ss_slice.json)
+    PARAS=$(grep -c '"sentences"' /tmp/ss_slice.json)
+    echo "  ${N} proc lines (${SLICE_LINES} total): sections=${SECTIONS}, paragraphs=${PARAS} $(elapsed $ST)"
 done
 echo "$(elapsed $T)"
 echo ""
