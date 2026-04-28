@@ -43,6 +43,17 @@ pub use preprocess::SourceFormat;
 use proc_listener::ProcedureDivisionListener;
 use sql_extract::analyze_exec_sql;
 
+/// Result of parsing a complete COBOL program.
+///
+/// Contains the AST, diagnostics for unhandled statements/parse issues,
+/// and token-level errors from the ANTLR lexer/parser.
+#[derive(Debug)]
+pub struct ParseResult {
+    pub program: CobolProgram,
+    pub diagnostics: Vec<TranspileDiagnostic>,
+    pub token_errors: Vec<TokenError>,
+}
+
 /// Parse COBOL source into a typed AST.
 ///
 /// Automatically detects fixed vs free format, preprocesses the source,
@@ -52,154 +63,24 @@ use sql_extract::analyze_exec_sql;
 ///
 /// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails,
 /// or `TranspileError::Preprocess` if preprocessing fails.
-pub fn parse_cobol(source: &str) -> Result<CobolProgram> {
-    // Preprocess (strip columns, comments, handle continuations, extract EXEC SQL)
-    let preprocessed = preprocess(source)?;
-
-    // Collect any extracted EXEC SQL blocks from preprocessing
-    let exec_blocks = drain_exec_blocks();
-
-    // Wrap standalone copybooks in a minimal program skeleton
-    let input = wrap_if_copybook(&preprocessed);
-
-    // Parse each division independently using isolated parsing.
-    // Each division is extracted and parsed in its own ANTLR instance,
-    // preventing one malformed division from blocking the others.
-    let (working_storage, file_section) = parse_data_resilient(&input);
-    let (mut procedure_division, _) = parse_proc_resilient(&input);
-
-    // Extract PROGRAM-ID
-    let program_id = extract_program_id(&input);
-
-    // Convert extracted EXEC blocks to AST nodes
-    let exec_sql_statements = build_exec_sql_ast(&exec_blocks);
-
-    if let Some(ref mut proc_div) = procedure_division {
-        let mut block_iter = exec_sql_statements.iter()
-            .filter(|s| !matches!(s.sql_type, SqlStatementType::IncludeSqlca))
-            .peekable();
-        inject_exec_sql_into_proc_div(proc_div, &mut block_iter);
-    }
-
-    Ok(CobolProgram {
-        program_id,
-        data_division: Some(DataDivision {
-            working_storage,
-            local_storage: Vec::new(),
-            linkage: Vec::new(),
-            file_section,
-        }),
-        procedure_division,
-        source_path: None,
-        exec_sql_statements,
-    })
-}
-
-/// Parse already-preprocessed COBOL source into a typed AST.
+/// Internal parse engine. All public entry points delegate here.
 ///
-/// Unlike `parse_cobol()`, this skips the preprocessing step. Use when
-/// the source has already been through `preprocess()` and COPY expansion.
+/// Uses isolated per-division parsing with chunked + parallel ANTLR passes.
+/// Each division is extracted and parsed in its own ANTLR instance(s),
+/// preventing one malformed division from blocking the others.
 ///
-/// # Errors
-///
-/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
-pub fn parse_cobol_from_source(source: &str) -> Result<CobolProgram> {
-    // Wrap standalone copybooks in a minimal program skeleton
-    let input = wrap_if_copybook(source);
-
-    // Parse DATA DIVISION (input already preprocessed, skip double-preprocessing)
-    let working_storage = parse_data_division_preprocessed(&input)?;
-
-    // Parse FILE SECTION and FILE-CONTROL
-    let file_section = parse_file_section(&input)?;
-
-    // Parse PROCEDURE DIVISION
-    let procedure_division = parse_procedure_division(&input)?;
-
-    // Extract PROGRAM-ID
-    let program_id = extract_program_id(&input);
-
-    Ok(CobolProgram {
-        program_id,
-        data_division: Some(DataDivision {
-            working_storage,
-            local_storage: Vec::new(),
-            linkage: Vec::new(),
-            file_section,
-        }),
-        procedure_division,
-        source_path: None,
-        exec_sql_statements: Vec::new(),
-    })
-}
-
-/// Parse COBOL source into a typed AST, also returning diagnostics.
-///
-/// Like `parse_cobol()`, but additionally returns diagnostics for
-/// unhandled statements, parse errors, and coverage gaps.
-///
-/// # Errors
-///
-/// Returns `TranspileError::Preprocess` if source preprocessing fails.
-/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
-pub fn parse_cobol_with_diagnostics(source: &str) -> Result<(CobolProgram, Vec<TranspileDiagnostic>)> {
-    let preprocessed = preprocess(source)?;
-    let exec_blocks = drain_exec_blocks();
-    let input = wrap_if_copybook(&preprocessed);
-
-    let working_storage = parse_data_division(&input)?;
-    let file_section = parse_file_section(&input)?;
-
-    let (mut procedure_division, diagnostics) = parse_procedure_division_with_diagnostics(&input)?;
-
-    let program_id = extract_program_id(&input);
-
-    let exec_sql_statements = build_exec_sql_ast(&exec_blocks);
-
-    // Inject ExecSql statements into the procedure division
-    if let Some(ref mut proc_div) = procedure_division {
-        let mut block_iter = exec_sql_statements.iter()
-            .filter(|s| !matches!(s.sql_type, SqlStatementType::IncludeSqlca))
-            .peekable();
-        inject_exec_sql_into_proc_div(proc_div, &mut block_iter);
-    }
-
-    let program = CobolProgram {
-        program_id,
-        data_division: Some(DataDivision {
-            working_storage,
-            local_storage: Vec::new(),
-            linkage: Vec::new(),
-            file_section,
-        }),
-        procedure_division,
-        source_path: None,
-        exec_sql_statements,
+/// `format`: `Some(fmt)` to force a source format, `None` for auto-detect.
+fn parse_cobol_internal(source: &str, format: Option<SourceFormat>) -> Result<ParseResult> {
+    let preprocessed = match format {
+        Some(fmt) => preprocess_with_format(source, Some(fmt))?,
+        None => preprocess(source)?,
     };
 
-    Ok((program, diagnostics))
-}
-
-/// Parse COBOL source into a typed AST, returning diagnostics AND token errors.
-///
-/// Like `parse_cobol_with_diagnostics()`, but also captures ANTLR lexer/parser
-/// token recognition errors (e.g., unrecognized characters like `#`, `@`, `~`).
-///
-/// # Errors
-///
-/// Returns `TranspileError::Preprocess` if source preprocessing fails.
-/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
-pub fn parse_cobol_with_token_errors(
-    source: &str,
-) -> Result<(CobolProgram, Vec<TranspileDiagnostic>, Vec<TokenError>)> {
-    let preprocessed = preprocess(source)?;
     let exec_blocks = drain_exec_blocks();
     let input = wrap_if_copybook(&preprocessed);
 
-    // Parse each division independently using isolated parsing.
     let (working_storage, file_section) = parse_data_resilient(&input);
-    let (mut procedure_division, diagnostics) = parse_proc_resilient(&input);
-    let token_errors = Vec::new(); // Token errors not available in isolated mode.
+    let (mut procedure_division, diagnostics, token_errors) = parse_proc_resilient(&input);
 
     let program_id = extract_program_id(&input);
     let exec_sql_statements = build_exec_sql_ast(&exec_blocks);
@@ -212,28 +93,42 @@ pub fn parse_cobol_with_token_errors(
         inject_exec_sql_into_proc_div(proc_div, &mut block_iter);
     }
 
-    let program = CobolProgram {
-        program_id,
-        data_division: Some(DataDivision {
-            working_storage,
-            local_storage: Vec::new(),
-            linkage: Vec::new(),
-            file_section,
-        }),
-        procedure_division,
-        source_path: None,
-        exec_sql_statements,
-    };
-
-    Ok((program, diagnostics, token_errors))
+    Ok(ParseResult {
+        program: CobolProgram {
+            program_id,
+            data_division: Some(DataDivision {
+                working_storage,
+                file_section,
+                ..Default::default()
+            }),
+            procedure_division,
+            source_path: None,
+            exec_sql_statements,
+        },
+        diagnostics,
+        token_errors,
+    })
 }
 
-/// Like `parse_cobol_with_token_errors` but with a source format override.
+/// Parse COBOL source into a typed AST.
 ///
-/// Use this when the source has been through COPY expansion and the format
-/// was detected on the original (unexpanded) source. Copybook content often
-/// has non-standard columns 1-6 (version IDs like `1.001A`) that can fool
-/// auto-detection into choosing free format.
+/// Automatically detects fixed vs free format, preprocesses the source,
+/// and runs the ANTLR4 parser with chunked + parallel listener walks.
+///
+/// # Errors
+///
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails,
+/// or `TranspileError::Preprocess` if preprocessing fails.
+pub fn parse_cobol(source: &str) -> Result<CobolProgram> {
+    parse_cobol_internal(source, None).map(|r| r.program)
+}
+
+/// Parse COBOL source into a typed AST with explicit format, returning
+/// diagnostics and token errors.
+///
+/// Use this when the source format was detected separately (e.g., on the
+/// original source before COPY expansion, since copybook content can fool
+/// auto-detection).
 ///
 /// # Errors
 ///
@@ -243,50 +138,33 @@ pub fn parse_cobol_with_format(
     source: &str,
     format: SourceFormat,
 ) -> Result<(CobolProgram, Vec<TranspileDiagnostic>, Vec<TokenError>)> {
-    let preprocessed = preprocess_with_format(source, Some(format))?;
-    let exec_blocks = drain_exec_blocks();
-    let input = wrap_if_copybook(&preprocessed);
+    let r = parse_cobol_internal(source, Some(format))?;
+    Ok((r.program, r.diagnostics, r.token_errors))
+}
 
-    // Parse each division independently using isolated parsing.
-    let (working_storage, file_section) = parse_data_resilient(&input);
-    let (mut procedure_division, diagnostics) = parse_proc_resilient(&input);
-    let token_errors = Vec::new();
-
-    let program_id = extract_program_id(&input);
-    let exec_sql_statements = build_exec_sql_ast(&exec_blocks);
-
-    if let Some(ref mut proc_div) = procedure_division {
-        let mut block_iter = exec_sql_statements
-            .iter()
-            .filter(|s| !matches!(s.sql_type, SqlStatementType::IncludeSqlca))
-            .peekable();
-        inject_exec_sql_into_proc_div(proc_div, &mut block_iter);
-    }
-
-    let program = CobolProgram {
-        program_id,
-        data_division: Some(DataDivision {
-            working_storage,
-            file_section,
-            ..Default::default()
-        }),
-        procedure_division,
-        source_path: None,
-        exec_sql_statements,
-    };
-
-    Ok((program, diagnostics, token_errors))
+/// Parse COBOL source into a typed AST, also returning diagnostics.
+///
+/// Uses auto-detected format. For explicit format control, use
+/// `parse_cobol_with_format` instead.
+///
+/// # Errors
+///
+/// Returns `TranspileError::Preprocess` if source preprocessing fails.
+/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails.
+pub fn parse_cobol_with_diagnostics(source: &str) -> Result<(CobolProgram, Vec<TranspileDiagnostic>)> {
+    let r = parse_cobol_internal(source, None)?;
+    Ok((r.program, r.diagnostics))
 }
 
 /// Parse PROCEDURE DIVISION using isolated parsing.
 ///
 /// Extracts just the PROCEDURE DIVISION text and parses it independently.
-fn parse_proc_resilient(input: &str) -> (Option<ProcedureDivision>, Vec<TranspileDiagnostic>) {
+fn parse_proc_resilient(input: &str) -> (Option<ProcedureDivision>, Vec<TranspileDiagnostic>, Vec<TokenError>) {
     match parse_proc_division_isolated(input) {
-        Ok((pd, diags, _token_errors)) => (pd, diags),
+        Ok((pd, diags, token_errors)) => (pd, diags, token_errors),
         Err(e) => {
             tracing::warn!(error = %e, "Isolated PROCEDURE DIVISION parse failed");
-            (None, Vec::new())
+            (None, Vec::new(), Vec::new())
         }
     }
 }
@@ -320,33 +198,6 @@ fn build_exec_sql_ast(blocks: &[ExtractedExecBlock]) -> Vec<ExecSqlStatement> {
         .collect()
 }
 
-/// Parse PROCEDURE DIVISION, returning both the AST and diagnostics.
-fn parse_procedure_division_with_diagnostics(
-    source: &str,
-) -> Result<(Option<ProcedureDivision>, Vec<TranspileDiagnostic>)> {
-    let upper = source.to_uppercase();
-    if !upper.contains("PROCEDURE DIVISION") {
-        return Ok((None, Vec::new()));
-    }
-
-    let listener = run_proc_listener(source)?;
-    let diagnostics = listener.diagnostics;
-
-    if listener.sections.is_empty() && listener.paragraphs.is_empty() {
-        return Ok((None, diagnostics));
-    }
-
-    Ok((
-        Some(ProcedureDivision {
-            using_params: Vec::new(),
-            returning: None,
-            sections: listener.sections,
-            paragraphs: listener.paragraphs,
-        }),
-        diagnostics,
-    ))
-}
-
 /// Parse COBOL source and extract DATA DIVISION into a hierarchical tree.
 ///
 /// Runs the ANTLR4 parser with `DataDivisionListener`, then builds
@@ -376,38 +227,6 @@ fn parse_data_division_preprocessed(source: &str) -> Result<Vec<DataEntry>> {
     }
 
     Ok(records)
-}
-
-/// Parse COBOL source and extract PROCEDURE DIVISION into AST.
-///
-/// Returns `None` if the source has no procedure division.
-/// Emits a warning to stderr if PROCEDURE DIVISION text is found but
-/// the parser extracts 0 paragraphs (indicates a parser issue).
-///
-/// # Errors
-///
-/// Returns `TranspileError::AntlrError` if the ANTLR4 parser fails to
-/// produce a parse tree for the procedure division.
-pub fn parse_procedure_division(source: &str) -> Result<Option<ProcedureDivision>> {
-    let upper = source.to_uppercase();
-    if !upper.contains("PROCEDURE DIVISION") {
-        return Ok(None);
-    }
-
-    let listener = run_proc_listener(source)?;
-
-    // If we got nothing but PROCEDURE DIVISION was in the source, return None.
-    // The caller (analyze_source) captures this as a warning in the diagnostics DB.
-    if listener.sections.is_empty() && listener.paragraphs.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(ProcedureDivision {
-        using_params: Vec::new(),
-        returning: None,
-        sections: listener.sections,
-        paragraphs: listener.paragraphs,
-    }))
 }
 
 /// Extract raw DATA DIVISION text from source (without program wrapper).
@@ -516,27 +335,48 @@ fn wrap_chunk_as_program(chunk: &str) -> String {
 fn parse_data_chunks(data_text: &str, batch_size: usize) -> Vec<DataEntry> {
     let chunks = split_data_division_into_chunks(data_text, batch_size);
     let total_chunks = chunks.len();
+
+    tracing::info!(chunks = total_chunks, "DATA DIVISION chunked parsing starting");
+
+    // Parse each chunk in parallel
+    let results: Vec<_> = chunks
+        .into_par_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let wrapped = wrap_chunk_as_program(&chunk);
+            match run_data_listener(&wrapped) {
+                Ok(listener) => {
+                    for d in &listener.diagnostics {
+                        tracing::warn!(severity = %d.severity, category = %d.category, "{}", d.message);
+                    }
+                    tracing::debug!(
+                        chunk = i + 1,
+                        total = total_chunks,
+                        fields = listener.items.len(),
+                        "data chunk parsed"
+                    );
+                    listener.items
+                }
+                Err(e) => {
+                    tracing::warn!(chunk = i + 1, total = total_chunks, error = %e, "DATA DIVISION chunk parse failed");
+                    Vec::new()
+                }
+            }
+        })
+        .collect();
+
+    // Merge results in order
     let mut all_items: Vec<DataEntry> = Vec::new();
     let mut success_count = 0;
-
-    for (i, chunk) in chunks.iter().enumerate() {
-        let wrapped = wrap_chunk_as_program(chunk);
-        match run_data_listener(&wrapped) {
-            Ok(listener) => {
-                for d in &listener.diagnostics {
-                    tracing::warn!(severity = %d.severity, category = %d.category, "{}", d.message);
-                }
-                all_items.extend(listener.items);
-                success_count += 1;
-            }
-            Err(e) => {
-                tracing::warn!(chunk = i + 1, total = total_chunks, error = %e, "DATA DIVISION chunk parse failed");
-            }
+    for items in results {
+        if !items.is_empty() {
+            success_count += 1;
         }
+        all_items.extend(items);
     }
 
     if total_chunks > 1 {
-        tracing::info!(success = success_count, total = total_chunks, fields = all_items.len(), "DATA DIVISION chunk parsing complete");
+        tracing::info!(success = success_count, total = total_chunks, fields = all_items.len(), "DATA DIVISION chunked parsing complete");
     }
 
     all_items
@@ -845,12 +685,6 @@ fn parse_proc_division_isolated(
     ))
 }
 
-/// Run ANTLR4 parse and walk with `ProcedureDivisionListener`.
-fn run_proc_listener(source: &str) -> Result<ProcedureDivisionListener> {
-    let (listener, _token_errors) = run_proc_listener_with_errors(source)?;
-    Ok(listener)
-}
-
 /// Run ANTLR4 parse and walk with `ProcedureDivisionListener`, also collecting
 /// token recognition errors from the lexer and parser.
 fn run_proc_listener_with_errors(
@@ -901,21 +735,6 @@ fn run_data_listener(source: &str) -> Result<DataDivisionListener> {
     let listener = Cobol85TreeWalker::walk(listener, &*tree);
 
     Ok(*listener)
-}
-
-/// Parse FILE-CONTROL SELECT entries and FILE SECTION FD/SD entries.
-///
-/// Returns `FileDescription` structs with file metadata. Record definitions
-/// are empty because they're already captured by `parse_data_division()`.
-fn parse_file_section(source: &str) -> Result<Vec<FileDescription>> {
-    let upper = source.to_uppercase();
-    // Only run the file listener if the source has FILE-CONTROL or FILE SECTION
-    if !upper.contains("FILE-CONTROL") && !upper.contains("FILE SECTION") {
-        return Ok(Vec::new());
-    }
-
-    let listener = run_file_listener(source)?;
-    Ok(listener.into_file_descriptions())
 }
 
 /// Run ANTLR4 parse and walk with `FileListener`.
@@ -1308,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_cobol_from_source_pre_expanded() {
+    fn parse_pre_expanded_source() {
         // Source that has already been preprocessed (free format, no columns)
         let source = concat!(
             "IDENTIFICATION DIVISION.\n",
@@ -1322,8 +1141,8 @@ mod tests {
             "    STOP RUN.\n",
         );
 
-        let result = parse_cobol_from_source(source);
-        assert!(result.is_ok(), "parse_cobol_from_source failed: {result:?}");
+        let result = parse_cobol(source);
+        assert!(result.is_ok(), "parse_cobol failed: {result:?}");
         let program = result.unwrap();
         assert_eq!(program.program_id, "EXPANDED");
         assert!(program.data_division.is_some());
@@ -1354,8 +1173,8 @@ mod tests {
                  STOP RUN.\n"
         );
 
-        let result = parse_cobol_from_source(&source);
-        assert!(result.is_ok(), "parse_cobol_from_source failed: {result:?}");
+        let result = parse_cobol(&source);
+        assert!(result.is_ok(), "parse_cobol failed: {result:?}");
         let program = result.unwrap();
         assert_eq!(program.program_id, "LARGE-WS-TEST");
         assert!(
