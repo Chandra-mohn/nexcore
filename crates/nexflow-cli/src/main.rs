@@ -304,6 +304,9 @@ fn cmd_validate(
         apis: &proj.apis,
         services: &proj.services,
         schemas: &proj.schemas,
+        transforms: &proj.transforms,
+        rules: &proj.rules,
+        procs: &proj.procs,
     };
     let result = nexflow_compiler::validate(&input);
 
@@ -529,6 +532,9 @@ fn cmd_build(
         apis: &loaded.apis,
         services: &loaded.services,
         schemas: &loaded.schemas,
+        transforms: &loaded.transforms,
+        rules: &loaded.rules,
+        procs: &loaded.procs,
     };
     let result = nexflow_compiler::validate(&input);
 
