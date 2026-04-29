@@ -105,8 +105,6 @@ impl DirectDslEmitter for DirectTransformEmitter {
         ));
 
         if has_string_ops {
-            use crate::dsl::dsl_ast::*;
-
             let mut string_notes = Vec::new();
             for pattern in &patterns {
                 use super::cobol_extract::CobolPattern;
