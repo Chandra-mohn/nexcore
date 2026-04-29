@@ -40,7 +40,10 @@ impl DslEmitter for SchemaEmitter {
         }
 
         // Decompose into entity groups (prefix-based)
-        let groups = decompose_entities(&annotated, &program);
+        let min_group = ctx.target
+            .map(|t| t.data_model.min_group_size)
+            .unwrap_or(2);
+        let groups = decompose_entities(&annotated, &program, min_group);
 
         let mut dsl_files = Vec::new();
         for group in groups {
@@ -106,7 +109,11 @@ pub struct SchemaField {
 }
 
 /// Decompose annotated fields into entity groups using prefix-based grouping.
-fn decompose_entities(fields: &[&AnnotatedField], program: &str) -> Vec<EntityGroup> {
+fn decompose_entities(
+    fields: &[&AnnotatedField],
+    program: &str,
+    min_group_size: usize,
+) -> Vec<EntityGroup> {
     // Group by common prefix (first two underscore segments)
     let mut prefix_groups: BTreeMap<String, Vec<&AnnotatedField>> = BTreeMap::new();
 
@@ -118,8 +125,8 @@ fn decompose_entities(fields: &[&AnnotatedField], program: &str) -> Vec<EntityGr
     let mut entities = Vec::new();
 
     for (prefix, group_fields) in &prefix_groups {
-        if group_fields.len() < 2 {
-            // Single fields go to misc group
+        if group_fields.len() < min_group_size {
+            // Below threshold -- goes to misc group
             continue;
         }
 
@@ -136,10 +143,10 @@ fn decompose_entities(fields: &[&AnnotatedField], program: &str) -> Vec<EntityGr
         });
     }
 
-    // Collect ungrouped fields (single-field prefixes) into misc
+    // Collect ungrouped fields (below-threshold prefixes) into misc
     let grouped_fields: std::collections::HashSet<&str> = prefix_groups
         .iter()
-        .filter(|(_, v)| v.len() >= 2)
+        .filter(|(_, v)| v.len() >= min_group_size)
         .flat_map(|(_, v)| v.iter().map(|f| f.rust_name.as_str()))
         .collect();
 

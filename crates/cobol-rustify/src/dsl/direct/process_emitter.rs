@@ -51,7 +51,7 @@ impl DirectDslEmitter for DirectProcessEmitter {
             return vec![];
         }
 
-        let (content, notes, confidence) = generate_process_file(&graph, &ctx.program_name);
+        let (content, notes, confidence) = generate_process_file(&graph, &ctx.program_name, None);
 
         vec![DslFile {
             path: format!(

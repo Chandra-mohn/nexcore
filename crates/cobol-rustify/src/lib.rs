@@ -467,6 +467,9 @@ pub fn emit_dsl_for_workspace(
     // Load hints once (from <output_dir>/rustify/hints.json if present)
     let hints_file = hints::read_hints(output_dir)?;
 
+    // Load target config (from <output_dir>/.cobol2rust-target.toml if present)
+    let target_config = target_config::load_target_config(output_dir)?;
+
     let src_dir = resolve_rs_dir(output_dir);
     let rs_files = collect_rs_files(&src_dir, None, None);
 
@@ -503,13 +506,16 @@ pub fn emit_dsl_for_workspace(
             .replace('\\', "/");
         let file_hints = hints_file.as_ref().and_then(|h| h.files.get(&rel_path));
 
+        // Resolve per-program target config overrides
+        let resolved_target = target_config::resolve_for_program(&target_config, &program_name);
+
         let legacy_ctx = dsl::EmitterContext {
             program_name: program_name.clone(),
             syn_file: &syn_file,
             source_text: &source_text,
             hints: file_hints,
             assessments: &[],
-            target: None,
+            target: Some(&resolved_target),
             source_path: rs_path.clone(),
         };
 
