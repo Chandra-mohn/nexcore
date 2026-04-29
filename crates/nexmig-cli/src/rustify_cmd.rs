@@ -73,16 +73,19 @@ pub struct RustifyArgs {
     #[arg(long)]
     pub emit_dsl: bool,
 
-    /// DSL emission strategy: legacy (default), direct, or compare.
-    #[arg(long, default_value = "legacy")]
+    /// DSL emission strategy: transpiled (default), legacy, or compare.
+    /// - transpiled: reads Phase 1 transpiled Rust/Java via syn
+    /// - legacy: reads original COBOL AST directly (requires --cobol-source)
+    /// - compare: runs both paths and diffs output
+    #[arg(long, default_value = "transpiled")]
     pub emit_mode: String,
 
-    /// Comma-separated emitters to use direct path for (schema, transform, rules, process).
+    /// Comma-separated emitters to use legacy (COBOL AST) path for (schema, transform, rules, process).
     /// Overrides --emit-mode for the named emitters.
     #[arg(long, value_delimiter = ',')]
-    pub direct_emitters: Vec<String>,
+    pub legacy_emitters: Vec<String>,
 
-    /// Root directory of original COBOL sources (required for --emit-mode direct/compare).
+    /// Root directory of original COBOL sources (required for --emit-mode legacy/compare).
     /// Paths in cobol2rust-manifest.toml are resolved relative to this directory.
     #[arg(long)]
     pub cobol_source: Option<PathBuf>,
@@ -168,17 +171,17 @@ pub fn run(cli: &Cli, args: &RustifyArgs) -> Result<ExitCode> {
     let verbose = args.verbose_report || cli.verbose > 0;
 
     let emit_mode = match args.emit_mode.as_str() {
+        "transpiled" => cobol_rustify::config::EmitMode::Transpiled,
         "legacy" => cobol_rustify::config::EmitMode::Legacy,
-        "direct" => cobol_rustify::config::EmitMode::Direct,
         "compare" => cobol_rustify::config::EmitMode::Compare,
         m => {
-            eprintln!("error: invalid emit-mode '{m}' (must be legacy, direct, or compare)");
+            eprintln!("error: invalid emit-mode '{m}' (must be transpiled, legacy, or compare)");
             return Ok(ExitCode::from(1));
         }
     };
 
     let emitter_overrides = cobol_rustify::config::EmitterOverrides {
-        direct: args.direct_emitters.clone(),
+        legacy: args.legacy_emitters.clone(),
     };
 
     let config = cobol_rustify::config::RustifyConfig {

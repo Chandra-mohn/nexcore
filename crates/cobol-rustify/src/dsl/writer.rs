@@ -332,15 +332,15 @@ fn diff_files(path: &str, legacy: &str, direct: &str) -> FileMismatch {
 /// Route DSL emission based on emit mode.
 ///
 /// When `direct-emit` feature is not enabled, only legacy mode is available;
-/// requesting direct or compare mode returns an error.
+/// requesting legacy (COBOL AST) or compare mode returns an error.
 #[cfg(not(feature = "direct-emit"))]
 pub fn emit_dsl_routed(
     legacy_ctx: &super::EmitterContext<'_>,
     mode: EmitMode,
 ) -> Result<(Vec<DslFile>, Option<ComparisonReport>), crate::error::RustifyError> {
     match mode {
-        EmitMode::Legacy => Ok((emit_all_dsl(legacy_ctx), None)),
-        EmitMode::Direct | EmitMode::Compare => {
+        EmitMode::Transpiled => Ok((emit_all_dsl(legacy_ctx), None)),
+        EmitMode::Legacy | EmitMode::Compare => {
             Err(crate::error::RustifyError::Io(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "direct-emit feature not enabled; rebuild with --features direct-emit",
@@ -358,14 +358,14 @@ pub fn emit_dsl_routed(
     overrides: &crate::config::EmitterOverrides,
 ) -> Result<(Vec<DslFile>, Option<ComparisonReport>), crate::error::RustifyError> {
     match mode {
-        EmitMode::Legacy if overrides.is_empty() => {
+        EmitMode::Transpiled if overrides.is_empty() => {
             Ok((emit_all_dsl(legacy_ctx), None))
         }
-        EmitMode::Direct => {
+        EmitMode::Legacy => {
             let ctx = direct_ctx.ok_or_else(|| {
                 crate::error::RustifyError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "direct mode requires CobolProgram (pass COBOL source path)",
+                    "legacy mode requires CobolProgram (pass COBOL source path via --cobol-source)",
                 ))
             })?;
             Ok((super::direct::emit_all_dsl_direct(ctx), None))
@@ -374,28 +374,28 @@ pub fn emit_dsl_routed(
             let dctx = direct_ctx.ok_or_else(|| {
                 crate::error::RustifyError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "compare mode requires CobolProgram (pass COBOL source path)",
+                    "compare mode requires CobolProgram (pass COBOL source path via --cobol-source)",
                 ))
             })?;
-            let legacy = emit_all_dsl(legacy_ctx);
-            let direct = super::direct::emit_all_dsl_direct(dctx);
-            let report = compare_outputs(&legacy, &direct);
+            let transpiled = emit_all_dsl(legacy_ctx);
+            let legacy = super::direct::emit_all_dsl_direct(dctx);
+            let report = compare_outputs(&transpiled, &legacy);
             report.print_summary();
-            Ok((legacy, Some(report)))
+            Ok((transpiled, Some(report)))
         }
-        // Legacy mode with per-emitter overrides: mixed mode
-        EmitMode::Legacy => {
+        // Transpiled mode with per-emitter overrides: mixed mode
+        EmitMode::Transpiled => {
             let dctx = direct_ctx.ok_or_else(|| {
                 crate::error::RustifyError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "per-emitter direct overrides require CobolProgram",
+                    "per-emitter legacy overrides require CobolProgram",
                 ))
             })?;
 
             let mut all_files = Vec::new();
 
             // Schema
-            if overrides.is_direct("schema") {
+            if overrides.is_legacy("schema") {
                 let emitter = super::direct::schema_emitter::DirectSchemaEmitter;
                 all_files.extend(super::direct::DirectDslEmitter::emit(&emitter, dctx));
             } else {
@@ -404,7 +404,7 @@ pub fn emit_dsl_routed(
             }
 
             // Transform
-            if overrides.is_direct("transform") {
+            if overrides.is_legacy("transform") {
                 let emitter = super::direct::transform_emitter::DirectTransformEmitter;
                 all_files.extend(super::direct::DirectDslEmitter::emit(&emitter, dctx));
             } else {
@@ -413,7 +413,7 @@ pub fn emit_dsl_routed(
             }
 
             // Rules
-            if overrides.is_direct("rules") {
+            if overrides.is_legacy("rules") {
                 let emitter = super::direct::rules_emitter::DirectRulesEmitter;
                 all_files.extend(super::direct::DirectDslEmitter::emit(&emitter, dctx));
             } else {
@@ -422,7 +422,7 @@ pub fn emit_dsl_routed(
             }
 
             // Process
-            if overrides.is_direct("process") {
+            if overrides.is_legacy("process") {
                 let emitter = super::direct::process_emitter::DirectProcessEmitter;
                 all_files.extend(super::direct::DirectDslEmitter::emit(&emitter, dctx));
             } else {

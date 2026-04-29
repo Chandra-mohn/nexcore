@@ -11,8 +11,8 @@
 # Environment:
 #   NEXMIG    Path to nexmig binary   (default: ~/nexsuite/bin/nexmig)
 #   JOBS      Parallel worker count   (default: 2)
-#   EMIT_MODE DSL emit mode           (default: direct)
-#             Options: legacy, direct, compare
+#   EMIT_MODE DSL emit mode           (default: legacy)
+#             Options: legacy (COBOL AST), transpiled (Phase 1 Rust), compare
 #
 # Outputs:
 #   ./rust-out/           Cargo workspace with transpiled Rust
@@ -24,7 +24,7 @@ set -euo pipefail
 
 NEXMIG="${NEXMIG:-$HOME/nexsuite/bin/nexmig}"
 JOBS="${JOBS:-2}"
-EMIT_MODE="${EMIT_MODE:-direct}"
+EMIT_MODE="${EMIT_MODE:-legacy}"
 
 COBOL_DIR="./cobol/cobolfile"
 WS_OUT="./rust-out"

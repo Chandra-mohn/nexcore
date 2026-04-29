@@ -7,31 +7,33 @@ use crate::rules::Tier;
 /// DSL emission strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmitMode {
-    /// Read from Phase 1 Rust via syn (current behavior).
-    #[default]
+    /// Read from original COBOL AST directly (full fidelity, requires direct-emit feature).
+    /// Named "legacy" because it reads the legacy COBOL source -- the source of truth.
     Legacy,
-    /// Read from COBOL AST directly (new path, requires direct-emit feature).
-    Direct,
-    /// Run both paths, diff output, report discrepancies. Returns legacy as production.
+    /// Read from Phase 1 transpiled Rust/Java via syn.
+    /// Named "transpiled" because it reads the transpiler's output.
+    #[default]
+    Transpiled,
+    /// Run both paths, diff output, report discrepancies. Returns transpiled as production.
     Compare,
 }
 
-/// Per-emitter override: which emitters should use the direct path.
+/// Per-emitter override: which emitters should use the legacy (COBOL AST) path.
 #[derive(Debug, Clone, Default)]
 pub struct EmitterOverrides {
-    /// Emitter names that should use the direct path (e.g., "schema", "transform").
-    pub direct: Vec<String>,
+    /// Emitter names that should use the legacy (COBOL AST) path (e.g., "schema", "transform").
+    pub legacy: Vec<String>,
 }
 
 impl EmitterOverrides {
-    /// Check whether a given emitter should use the direct path.
-    pub fn is_direct(&self, emitter_name: &str) -> bool {
-        self.direct.iter().any(|e| e == emitter_name)
+    /// Check whether a given emitter should use the legacy (COBOL AST) path.
+    pub fn is_legacy(&self, emitter_name: &str) -> bool {
+        self.legacy.iter().any(|e| e == emitter_name)
     }
 
     /// True if no per-emitter overrides are set.
     pub fn is_empty(&self) -> bool {
-        self.direct.is_empty()
+        self.legacy.is_empty()
     }
 }
 
@@ -97,7 +99,7 @@ impl Default for RustifyConfig {
             preserve_patches: false,
             jobs: 1,
             emit_dsl: false,
-            emit_mode: EmitMode::Legacy,
+            emit_mode: EmitMode::Transpiled,
             emitter_overrides: EmitterOverrides::default(),
             cobol_source_dir: None,
         }

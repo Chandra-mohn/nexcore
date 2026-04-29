@@ -455,7 +455,7 @@ pub fn emit_dsl_for_workspace_with_assessments(
     output_dir: &Path,
     assessments: &[rules::transform::Transform],
 ) -> Result<Vec<dsl::writer::DslWriteReport>, RustifyError> {
-    let needs_direct = config.emit_mode != config::EmitMode::Legacy
+    let needs_direct = config.emit_mode != config::EmitMode::Transpiled
         || !config.emitter_overrides.is_empty();
 
     // Load COBOL source mapping from manifest when direct path is needed
@@ -626,7 +626,7 @@ fn emit_dsl_for_program(
     program_name: &str,
     cobol_source_map: &HashMap<String, PathBuf>,
 ) -> Result<Vec<dsl::DslFile>, RustifyError> {
-    let needs_direct = config.emit_mode != config::EmitMode::Legacy
+    let needs_direct = config.emit_mode != config::EmitMode::Transpiled
         || !config.emitter_overrides.is_empty();
 
     let direct_ctx_holder: Option<(cobol_transpiler::ast::CobolProgram, PathBuf)>;
@@ -1327,7 +1327,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Legacy,
+            emit_mode: config::EmitMode::Transpiled,
             ..RustifyConfig::default()
         };
 
@@ -1359,7 +1359,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Direct,
+            emit_mode: config::EmitMode::Legacy,
             cobol_source_dir: Some(cobol_dir.clone()),
             ..RustifyConfig::default()
         };
@@ -1413,9 +1413,9 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Legacy,
+            emit_mode: config::EmitMode::Transpiled,
             emitter_overrides: config::EmitterOverrides {
-                direct: vec!["schema".to_string()],
+                legacy: vec!["schema".to_string()],
             },
             cobol_source_dir: Some(cobol_dir.clone()),
             ..RustifyConfig::default()
@@ -1436,7 +1436,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Direct,
+            emit_mode: config::EmitMode::Legacy,
             cobol_source_dir: None, // intentionally missing
             ..RustifyConfig::default()
         };
@@ -1463,7 +1463,6 @@ mod tests {
         let ws_dir = base.join("workspace");
         std::fs::create_dir_all(ws_dir.join("src")).unwrap();
         std::fs::write(ws_dir.join("src/main.rs"), TEST_TRANSPILED_RUST).unwrap();
-
         // Old-style manifest WITHOUT program_id field
         let old_manifest = "\
             # old manifest\n\
@@ -1483,7 +1482,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Direct,
+            emit_mode: config::EmitMode::Legacy,
             cobol_source_dir: Some(cobol_dir),
             ..RustifyConfig::default()
         };
@@ -1529,7 +1528,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Legacy,
+            emit_mode: config::EmitMode::Transpiled,
             ..RustifyConfig::default()
         };
 
@@ -1577,7 +1576,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Legacy,
+            emit_mode: config::EmitMode::Transpiled,
             ..RustifyConfig::default()
         };
 
@@ -1655,7 +1654,7 @@ mod tests {
         let config = RustifyConfig {
             source_dir: ws_dir.clone(),
             emit_dsl: true,
-            emit_mode: config::EmitMode::Legacy,
+            emit_mode: config::EmitMode::Transpiled,
             ..RustifyConfig::default()
         };
 
