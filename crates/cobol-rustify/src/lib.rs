@@ -464,6 +464,9 @@ pub fn emit_dsl_for_workspace(
         )));
     }
 
+    // Load hints once (from <output_dir>/rustify/hints.json if present)
+    let hints_file = hints::read_hints(output_dir)?;
+
     let src_dir = resolve_rs_dir(output_dir);
     let rs_files = collect_rs_files(&src_dir, None, None);
 
@@ -492,11 +495,19 @@ pub fn emit_dsl_for_workspace(
             continue; // Not a COBOL-generated file
         }
 
+        // Look up per-file hints by relative path
+        let rel_path = rs_path
+            .strip_prefix(output_dir)
+            .unwrap_or(rs_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let file_hints = hints_file.as_ref().and_then(|h| h.files.get(&rel_path));
+
         let legacy_ctx = dsl::EmitterContext {
             program_name: program_name.clone(),
             syn_file: &syn_file,
             source_text: &source_text,
-            hints: None,
+            hints: file_hints,
             assessments: &[],
             target: None,
             source_path: rs_path.clone(),
@@ -528,12 +539,6 @@ pub fn emit_dsl_for_workspace(
         if dsl_files.is_empty() {
             continue;
         }
-
-        let rel_path = rs_path
-            .strip_prefix(output_dir)
-            .unwrap_or(rs_path)
-            .to_string_lossy()
-            .to_string();
 
         match dsl::writer::write_dsl_files(
             output_dir,
@@ -1557,6 +1562,86 @@ mod tests {
 
         assert_eq!(manifest.total_programs, 2);
         assert!(manifest.errors.is_empty(), "Parse failures are silent skips, not errors");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn e2e_hints_passthrough_enables_co_access_schemas() {
+        let base = std::env::temp_dir().join(format!(
+            "cobol2rust_dsl_e2e_hints_{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let ws_dir = base.join("workspace");
+        std::fs::create_dir_all(ws_dir.join("src")).unwrap();
+        std::fs::write(ws_dir.join("src/main.rs"), TEST_TRANSPILED_RUST).unwrap();
+
+        // Create hints.json with co-access data:
+        // 3 fields share the same paragraph scope -> should produce co-access schema
+        let hints_json = r#"{
+            "version": "1.0",
+            "files": {
+                "src/main.rs": {
+                    "cobol_source": "TESTDSL.CBL",
+                    "fields": {
+                        "ws_acct_number": {
+                            "pic": "X(10)",
+                            "usage": "DISPLAY",
+                            "level": 1,
+                            "read_count": 5,
+                            "write_count": 2,
+                            "paragraph_scope": ["VALIDATE-PARA", "PROCESS-PARA"]
+                        },
+                        "ws_acct_balance": {
+                            "pic": "S9(9)V99",
+                            "usage": "COMP-3",
+                            "level": 1,
+                            "read_count": 3,
+                            "write_count": 1,
+                            "paragraph_scope": ["VALIDATE-PARA", "PROCESS-PARA"]
+                        },
+                        "ws_acct_type": {
+                            "pic": "X(1)",
+                            "usage": "DISPLAY",
+                            "level": 1,
+                            "read_count": 4,
+                            "write_count": 0,
+                            "paragraph_scope": ["VALIDATE-PARA", "PROCESS-PARA"]
+                        }
+                    },
+                    "paragraphs": {},
+                    "level_88_groups": {},
+                    "call_targets": [],
+                    "file_io_fields": []
+                }
+            }
+        }"#;
+        let hints_dir = ws_dir.join("rustify");
+        std::fs::create_dir_all(&hints_dir).unwrap();
+        std::fs::write(hints_dir.join("hints.json"), hints_json).unwrap();
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Legacy,
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 1);
+
+        // Should have at least one co_access schema file
+        let co_access_files: Vec<_> = reports[0]
+            .files
+            .iter()
+            .filter(|f| f.path.contains("co_access"))
+            .collect();
+        assert!(
+            !co_access_files.is_empty(),
+            "Should produce co-access schema from hints (found files: {:?})",
+            reports[0].files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

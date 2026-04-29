@@ -39,7 +39,7 @@ impl DslEmitter for SchemaEmitter {
             return vec![];
         }
 
-        // Decompose into entity groups
+        // Decompose into entity groups (prefix-based)
         let groups = decompose_entities(&annotated, &program);
 
         let mut dsl_files = Vec::new();
@@ -58,6 +58,12 @@ impl DslEmitter for SchemaEmitter {
                 notes,
                 source_fields,
             });
+        }
+
+        // Co-access grouping from hints (fields used by the same paragraphs)
+        if let Some(hints) = ctx.hints {
+            let co_access = extract_co_access_schemas(&annotated, hints, &program);
+            dsl_files.extend(co_access);
         }
 
         dsl_files
@@ -405,6 +411,77 @@ pub fn parse_level88_values(l88: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Extract co-access schemas from hints: fields accessed by the same paragraphs
+/// are semantically related. Produces schemas for groups with 3+ fields.
+fn extract_co_access_schemas(
+    annotated: &[&AnnotatedField],
+    hints: &crate::hints::FileHints,
+    program: &str,
+) -> Vec<DslFile> {
+    use std::collections::HashMap;
+
+    // Group fields by their paragraph_scope signature
+    let mut scope_groups: HashMap<Vec<String>, Vec<&AnnotatedField>> = HashMap::new();
+
+    for field in annotated {
+        if let Some(hint) = hints.fields.get(&field.rust_name) {
+            if !hint.paragraph_scope.is_empty() {
+                let mut scope = hint.paragraph_scope.clone();
+                scope.sort();
+                scope_groups.entry(scope).or_default().push(field);
+            }
+        }
+    }
+
+    let mut dsl_files = Vec::new();
+    let mut group_idx = 0;
+
+    for (scope, fields) in &scope_groups {
+        if fields.len() < 3 {
+            continue; // Only group 3+ fields
+        }
+
+        group_idx += 1;
+        let group_name = format!(
+            "{}_co_access_{}",
+            cobol_name_to_snake(program),
+            group_idx,
+        );
+
+        let schema_fields: Vec<SchemaField> = fields
+            .iter()
+            .map(|f| annotated_to_schema_field(f))
+            .collect();
+
+        let group = EntityGroup {
+            name: group_name.clone(),
+            fields: schema_fields,
+            reason: format!("co-access: fields used by paragraphs {:?}", scope),
+        };
+
+        let (content, mut notes, confidence) = generate_schema(&group, program);
+        notes.push(format!(
+            "co-access group: {} fields used by same paragraph scope",
+            fields.len()
+        ));
+
+        let source_fields: Vec<String> = fields
+            .iter()
+            .map(|f| f.rust_name.clone())
+            .collect();
+
+        dsl_files.push(DslFile {
+            path: format!("schema/{}.schema", group_name),
+            content,
+            confidence: confidence * 0.8, // lower confidence for heuristic grouping
+            notes,
+            source_fields,
+        });
+    }
+
+    dsl_files
 }
 
 #[cfg(test)]
