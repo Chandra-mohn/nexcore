@@ -1,0 +1,42 @@
+# Project configuration for SSUPDATE and all COBOL programs.
+#
+# Place this file (or a symlink) in the COBOL project root alongside ./cobol/
+# so that `nexmig transpile --workspace` and `nexmig project` pick it up
+# automatically.
+#
+# Usage:
+#   cd /path/to/client-repo
+#   cp /path/to/nexcore/scripts/project-ssupdate/.cobol2rust.toml .
+#   nexmig project . -j 2
+#
+# Or run the full pipeline with DSL:
+#   bash /path/to/nexcore/scripts/project-ssupdate/run_pipeline.sh
+
+[workspace]
+# Copybook search directories (relative to project root)
+copy_paths = [
+    "cobol/copybook/code-copybooks",
+    "cobol/copybook/layout-copybooks",
+]
+
+# File extensions to scan for source programs
+extensions = ["cbl", "cob", "cobol"]
+
+# Glob patterns to exclude (e.g., test fixtures, generated code)
+# exclude = ["*TEST*", "*BACKUP*"]
+
+[pipeline]
+# Transpiled Rust workspace output directory
+output = "rust-out"
+
+# Parallel workers (2 for the 2-vCPU client machine)
+jobs = 2
+
+# Skip files that fail parsing, report at end
+continue_on_error = true
+
+# Skip unchanged files based on mtime (faster re-runs)
+incremental = true
+
+# Path to cobol-runtime crate (uncomment if using local path dependency)
+# runtime_path = "/path/to/cobol-runtime"

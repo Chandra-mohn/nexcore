@@ -20,6 +20,8 @@ pub mod target_config;
 
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(feature = "direct-emit")]
+use std::path::PathBuf;
 
 use config::RustifyConfig;
 use error::RustifyError;
@@ -320,7 +322,7 @@ pub fn apply_workspace(config: &RustifyConfig) -> Result<ApplyReport, RustifyErr
 
     // Step 8: Emit Nexflow DSL files (Tier 5) if requested
     if config.emit_dsl {
-        emit_dsl_for_workspace(&output_dir)?;
+        emit_dsl_for_workspace(config, &output_dir)?;
     }
 
     Ok(ApplyReport {
@@ -421,13 +423,47 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 
 /// Emit Nexflow DSL files for all .rs source files in the workspace.
 ///
-/// Walks `<output>/src/` (or flat .rs layout), parses each .rs file with syn,
-/// runs all 4 DSL emitters, and writes output under `<output>/dsl/`.
+/// Routes through `emit_dsl_routed()` based on `config.emit_mode`:
+/// - Legacy: parses transpiled Rust via syn (default)
+/// - Direct: parses original COBOL source via cobol-transpiler (requires `direct-emit` feature)
+/// - Compare: runs both paths and diffs output
+///
+/// Direct/compare modes require `config.cobol_source_dir` to locate original .cbl files.
+/// The COBOL source paths are resolved via `cobol2rust-manifest.toml` in the workspace.
 ///
 /// # Errors
 ///
 /// Returns `RustifyError::Io` if reading source files or writing DSL output fails.
-pub fn emit_dsl_for_workspace(output_dir: &Path) -> Result<Vec<dsl::writer::DslWriteReport>, RustifyError> {
+/// Returns `RustifyError::Io` if direct/compare mode is requested but `cobol_source_dir` is not set.
+pub fn emit_dsl_for_workspace(
+    config: &RustifyConfig,
+    output_dir: &Path,
+) -> Result<Vec<dsl::writer::DslWriteReport>, RustifyError> {
+    let needs_direct = config.emit_mode != config::EmitMode::Legacy
+        || !config.emitter_overrides.is_empty();
+
+    // Load COBOL source mapping from manifest when direct path is needed
+    #[cfg(feature = "direct-emit")]
+    let cobol_source_map: HashMap<String, PathBuf> = if needs_direct {
+        let cobol_root = config.cobol_source_dir.as_ref().ok_or_else(|| {
+            RustifyError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "direct/compare emit mode requires --cobol-source <DIR>",
+            ))
+        })?;
+        load_cobol_source_map(output_dir, cobol_root)?
+    } else {
+        HashMap::new()
+    };
+
+    #[cfg(not(feature = "direct-emit"))]
+    if needs_direct {
+        return Err(RustifyError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "direct-emit feature not enabled; rebuild with --features direct-emit",
+        )));
+    }
+
     let src_dir = resolve_rs_dir(output_dir);
     let rs_files = collect_rs_files(&src_dir, None, None);
 
@@ -449,7 +485,7 @@ pub fn emit_dsl_for_workspace(output_dir: &Path) -> Result<Vec<dsl::writer::DslW
             continue; // Not a COBOL-generated file
         }
 
-        let ctx = dsl::EmitterContext {
+        let legacy_ctx = dsl::EmitterContext {
             program_name: program_name.clone(),
             syn_file: &syn_file,
             source_text: &source_text,
@@ -459,7 +495,15 @@ pub fn emit_dsl_for_workspace(output_dir: &Path) -> Result<Vec<dsl::writer::DslW
             source_path: rs_path.clone(),
         };
 
-        let dsl_files = dsl::writer::emit_all_dsl(&ctx);
+        // Route through emit_dsl_routed for proper mode dispatch
+        let dsl_files = emit_dsl_for_program(
+            config,
+            &legacy_ctx,
+            &program_name,
+            #[cfg(feature = "direct-emit")]
+            &cobol_source_map,
+        )?;
+
         if dsl_files.is_empty() {
             continue;
         }
@@ -480,6 +524,167 @@ pub fn emit_dsl_for_workspace(output_dir: &Path) -> Result<Vec<dsl::writer::DslW
     }
 
     Ok(reports)
+}
+
+/// Emit DSL files for a single program, routing through the configured emit mode.
+#[cfg(not(feature = "direct-emit"))]
+fn emit_dsl_for_program(
+    config: &RustifyConfig,
+    legacy_ctx: &dsl::EmitterContext<'_>,
+    _program_name: &str,
+) -> Result<Vec<dsl::DslFile>, RustifyError> {
+    let (files, _) = dsl::writer::emit_dsl_routed(legacy_ctx, config.emit_mode)?;
+    Ok(files)
+}
+
+/// Emit DSL files for a single program, routing through the configured emit mode.
+/// When direct/compare mode is active, parses the original COBOL source.
+#[cfg(feature = "direct-emit")]
+fn emit_dsl_for_program(
+    config: &RustifyConfig,
+    legacy_ctx: &dsl::EmitterContext<'_>,
+    program_name: &str,
+    cobol_source_map: &HashMap<String, PathBuf>,
+) -> Result<Vec<dsl::DslFile>, RustifyError> {
+    let needs_direct = config.emit_mode != config::EmitMode::Legacy
+        || !config.emitter_overrides.is_empty();
+
+    let direct_ctx_holder: Option<(cobol_transpiler::ast::CobolProgram, PathBuf)>;
+    let direct_ctx = if needs_direct {
+        let cobol_path = cobol_source_map.get(program_name).ok_or_else(|| {
+            RustifyError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "COBOL source for program '{}' not found in manifest; \
+                     check cobol2rust-manifest.toml and --cobol-source path",
+                    program_name
+                ),
+            ))
+        })?;
+
+        let cobol_source = std::fs::read_to_string(cobol_path).map_err(|e| {
+            RustifyError::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to read COBOL source {}: {}", cobol_path.display(), e),
+            ))
+        })?;
+
+        tracing::info!(
+            program = %program_name,
+            path = %cobol_path.display(),
+            "Parsing COBOL source for direct DSL emission"
+        );
+
+        let cobol_program = cobol_transpiler::parser::parse_cobol(&cobol_source)
+            .map_err(|e| {
+                RustifyError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to parse COBOL source {}: {}", cobol_path.display(), e),
+                ))
+            })?;
+
+        direct_ctx_holder = Some((cobol_program, cobol_path.clone()));
+        let (ref prog, ref path) = *direct_ctx_holder.as_ref().unwrap();
+        Some(dsl::direct::DirectEmitterContext {
+            cobol_program: prog,
+            program_name: program_name.to_string(),
+            hints: None,
+            assessments: &[],
+            target: None,
+            source_path: path.clone(),
+        })
+    } else {
+        direct_ctx_holder = None;
+        #[allow(clippy::let_unit_value)]
+        let _ = &direct_ctx_holder; // suppress unused-assignment warning
+        None
+    };
+
+    let (files, comparison) = dsl::writer::emit_dsl_routed(
+        legacy_ctx,
+        direct_ctx.as_ref(),
+        config.emit_mode,
+        &config.emitter_overrides,
+    )?;
+
+    if let Some(report) = comparison {
+        report.print_summary();
+    }
+
+    Ok(files)
+}
+
+#[cfg(feature = "direct-emit")]
+/// Load the program-name -> COBOL source path mapping from `cobol2rust-manifest.toml`.
+///
+/// The manifest stores relative source paths per program. We resolve them
+/// against `cobol_root` to get absolute paths.
+fn load_cobol_source_map(
+    workspace_dir: &Path,
+    cobol_root: &Path,
+) -> Result<HashMap<String, PathBuf>, RustifyError> {
+    let manifest_path = workspace_dir.join("cobol2rust-manifest.toml");
+    if !manifest_path.exists() {
+        return Err(RustifyError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "cobol2rust-manifest.toml not found in {}; \
+                 run `nexmig transpile --workspace` first",
+                workspace_dir.display()
+            ),
+        )));
+    }
+
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let table: toml::Table = content.parse().map_err(|e: toml::de::Error| {
+        RustifyError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid cobol2rust-manifest.toml: {}", e),
+        ))
+    })?;
+
+    let mut map = HashMap::new();
+    if let Some(programs) = table.get("programs").and_then(|v| v.as_table()) {
+        for (_crate_name, info) in programs {
+            let info = match info.as_table() {
+                Some(t) => t,
+                None => continue,
+            };
+            let source_rel = match info.get("source").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            // Prefer explicit program_id from manifest (added in v0.3.4).
+            // Fall back to uppercased filename stem for older manifests.
+            let program_id = if let Some(id) = info.get("program_id").and_then(|v| v.as_str()) {
+                id.to_string()
+            } else {
+                let source_path = std::path::Path::new(source_rel);
+                source_path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_uppercase()
+            };
+
+            let absolute_path = cobol_root.join(source_rel);
+            map.insert(program_id, absolute_path);
+        }
+    }
+
+    if map.is_empty() {
+        tracing::warn!(
+            manifest = %manifest_path.display(),
+            "No programs found in cobol2rust-manifest.toml"
+        );
+    } else {
+        tracing::info!(
+            programs = map.len(),
+            "Loaded COBOL source mapping from manifest"
+        );
+    }
+
+    Ok(map)
 }
 
 /// List all available rules.
@@ -922,5 +1127,291 @@ mod tests {
         assert_eq!(first_checksum, second_checksum);
 
         cleanup_test("idempotent");
+    }
+
+    // ---- E2E tests for direct-emit integration ----
+
+    /// Minimal COBOL source that exercises all 4 emitters.
+    const TEST_COBOL: &str = "\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TESTDSL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-ACCT-NUMBER        PIC X(10).
+       01  WS-ACCT-BALANCE       PIC S9(9)V99 COMP-3.
+       01  WS-ACCT-TYPE          PIC X(1).
+           88 SAVINGS             VALUE 'S'.
+           88 CHECKING            VALUE 'C'.
+       01  WS-RESULT             PIC X(20).
+       PROCEDURE DIVISION.
+       MAIN-SECTION SECTION.
+       MAIN-PARA.
+           PERFORM VALIDATE-PARA
+           PERFORM PROCESS-PARA
+           STOP RUN.
+       VALIDATE-PARA.
+           IF WS-ACCT-TYPE = 'S'
+               MOVE 'SAVINGS-OK' TO WS-RESULT
+           ELSE
+               MOVE 'CHECK-OK' TO WS-RESULT
+           END-IF.
+       PROCESS-PARA.
+           COMPUTE WS-ACCT-BALANCE =
+               WS-ACCT-BALANCE + 100.
+";
+
+    /// Transpiled Rust that matches TEST_COBOL (simulates transpiler output).
+    const TEST_TRANSPILED_RUST: &str = r#"
+        #![allow(unused_imports, unused_variables, non_snake_case)]
+        use cobol_runtime::prelude::*;
+
+        #[cobol(program = "TESTDSL")]
+        pub struct WorkingStorage {
+            #[cobol(level = 1, pic = "X(10)")]
+            pub ws_acct_number: PicX,
+            #[cobol(level = 1, pic = "S9(9)V99", comp3, signed)]
+            pub ws_acct_balance: PackedDecimal,
+            #[cobol(level = 1, pic = "X(1)", level88 = "SAVINGS:S,CHECKING:C")]
+            pub ws_acct_type: PicX,
+            #[cobol(level = 1, pic = "X(20)")]
+            pub ws_result: PicX,
+        }
+
+        #[cobol(section = "MAIN-SECTION", performs = "VALIDATE-PARA,PROCESS-PARA")]
+        fn main_para(ws: &mut WorkingStorage, ctx: &mut ProgramContext) {
+            validate_para(ws, ctx);
+            process_para(ws, ctx);
+        }
+
+        #[cobol(section = "MAIN-SECTION", reads = "WS-ACCT-TYPE", writes = "WS-RESULT")]
+        fn validate_para(ws: &mut WorkingStorage, ctx: &mut ProgramContext) {
+            if ws.ws_acct_type.to_string() == "S" {
+                ws.ws_result.set("SAVINGS-OK");
+            } else {
+                ws.ws_result.set("CHECK-OK");
+            }
+        }
+
+        #[cobol(section = "MAIN-SECTION", reads = "WS-ACCT-BALANCE", writes = "WS-ACCT-BALANCE")]
+        fn process_para(ws: &mut WorkingStorage, ctx: &mut ProgramContext) {
+            ws.ws_acct_balance.pack(ws.ws_acct_balance.unpack() + dec!(100));
+        }
+    "#;
+
+    /// Manifest TOML that maps TESTDSL to its COBOL source.
+    fn test_manifest_toml(cobol_rel_path: &str) -> String {
+        format!(
+            "# test manifest\n\
+             [programs.testdsl]\n\
+             program_id = \"TESTDSL\"\n\
+             source = \"{cobol_rel_path}\"\n\
+             type = \"main\"\n\
+             \n\
+             [copybooks]\n\
+             sources = []\n\
+             files = []\n"
+        )
+    }
+
+    /// Set up a test workspace with COBOL source, transpiled Rust, and manifest.
+    fn setup_dsl_test(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("cobol2rust_dsl_e2e_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // Workspace dir (transpiled Rust output)
+        let ws_dir = base.join("workspace");
+        std::fs::create_dir_all(ws_dir.join("src")).unwrap();
+        std::fs::write(ws_dir.join("src/main.rs"), TEST_TRANSPILED_RUST).unwrap();
+        std::fs::write(
+            ws_dir.join("cobol2rust-manifest.toml"),
+            test_manifest_toml("TESTDSL.CBL"),
+        ).unwrap();
+
+        // COBOL source dir
+        let cobol_dir = base.join("cobol");
+        std::fs::create_dir_all(&cobol_dir).unwrap();
+        std::fs::write(cobol_dir.join("TESTDSL.CBL"), TEST_COBOL).unwrap();
+
+        (ws_dir, cobol_dir)
+    }
+
+    fn cleanup_dsl_test(name: &str) {
+        let base = std::env::temp_dir().join(format!("cobol2rust_dsl_e2e_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn e2e_legacy_emit_produces_dsl_files() {
+        let (ws_dir, _cobol_dir) = setup_dsl_test("legacy");
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Legacy,
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 1, "Should have 1 program report");
+
+        let report = &reports[0];
+        assert_eq!(report.program_name, "TESTDSL");
+        assert!(report.total_files > 0, "Should produce DSL files");
+
+        // Verify files exist on disk
+        let dsl_dir = ws_dir.join("dsl");
+        assert!(dsl_dir.exists(), "dsl/ directory should exist");
+        assert!(dsl_dir.join("dsl_manifest.json").exists(), "manifest should exist");
+
+        // Verify at least schema and process layers produced
+        let layers: Vec<&str> = report.files.iter().map(|f| f.layer.as_str()).collect();
+        assert!(layers.contains(&"schema"), "Should have schema files");
+        assert!(layers.contains(&"process"), "Should have process files");
+
+        cleanup_dsl_test("legacy");
+    }
+
+    #[cfg(feature = "direct-emit")]
+    #[test]
+    fn e2e_direct_emit_produces_dsl_files() {
+        let (ws_dir, cobol_dir) = setup_dsl_test("direct");
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Direct,
+            cobol_source_dir: Some(cobol_dir.clone()),
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 1, "Should have 1 program report");
+
+        let report = &reports[0];
+        assert_eq!(report.program_name, "TESTDSL");
+        assert!(report.total_files > 0, "Direct path should produce DSL files");
+
+        // Verify at least schema layer (direct emitter reads DATA DIVISION)
+        let layers: Vec<&str> = report.files.iter().map(|f| f.layer.as_str()).collect();
+        assert!(layers.contains(&"schema"), "Direct should produce schema files");
+
+        cleanup_dsl_test("direct");
+    }
+
+    #[cfg(feature = "direct-emit")]
+    #[test]
+    fn e2e_compare_mode_runs_both_paths() {
+        let (ws_dir, cobol_dir) = setup_dsl_test("compare");
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Compare,
+            cobol_source_dir: Some(cobol_dir.clone()),
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 1, "Compare mode should produce 1 report");
+
+        let report = &reports[0];
+        assert!(report.total_files > 0, "Compare should produce DSL files (legacy output)");
+
+        // Compare mode returns legacy output; the comparison report is printed via tracing
+        // but the files written should be the legacy path's output
+        let dsl_dir = ws_dir.join("dsl");
+        assert!(dsl_dir.join("dsl_manifest.json").exists());
+
+        cleanup_dsl_test("compare");
+    }
+
+    #[cfg(feature = "direct-emit")]
+    #[test]
+    fn e2e_mixed_overrides_use_direct_for_named_emitters() {
+        let (ws_dir, cobol_dir) = setup_dsl_test("mixed");
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Legacy,
+            emitter_overrides: config::EmitterOverrides {
+                direct: vec!["schema".to_string()],
+            },
+            cobol_source_dir: Some(cobol_dir.clone()),
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].total_files > 0, "Mixed mode should produce DSL files");
+
+        cleanup_dsl_test("mixed");
+    }
+
+    #[cfg(feature = "direct-emit")]
+    #[test]
+    fn e2e_direct_without_cobol_source_errors() {
+        let (ws_dir, _cobol_dir) = setup_dsl_test("no_cobol");
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Direct,
+            cobol_source_dir: None, // intentionally missing
+            ..RustifyConfig::default()
+        };
+
+        let result = emit_dsl_for_workspace(&config, &ws_dir);
+        assert!(result.is_err(), "Should error without cobol_source_dir");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("--cobol-source"),
+            "Error should mention --cobol-source flag, got: {err}"
+        );
+
+        cleanup_dsl_test("no_cobol");
+    }
+
+    #[cfg(feature = "direct-emit")]
+    #[test]
+    fn e2e_manifest_without_program_id_falls_back_to_filename() {
+        let base = std::env::temp_dir().join(format!(
+            "cobol2rust_dsl_e2e_fallback_{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let ws_dir = base.join("workspace");
+        std::fs::create_dir_all(ws_dir.join("src")).unwrap();
+        std::fs::write(ws_dir.join("src/main.rs"), TEST_TRANSPILED_RUST).unwrap();
+
+        // Old-style manifest WITHOUT program_id field
+        let old_manifest = "\
+            # old manifest\n\
+            [programs.testdsl]\n\
+            source = \"TESTDSL.CBL\"\n\
+            type = \"main\"\n\
+            \n\
+            [copybooks]\n\
+            sources = []\n\
+            files = []\n";
+        std::fs::write(ws_dir.join("cobol2rust-manifest.toml"), old_manifest).unwrap();
+
+        let cobol_dir = base.join("cobol");
+        std::fs::create_dir_all(&cobol_dir).unwrap();
+        std::fs::write(cobol_dir.join("TESTDSL.CBL"), TEST_COBOL).unwrap();
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Direct,
+            cobol_source_dir: Some(cobol_dir),
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 1, "Should work with filename fallback");
+        assert_eq!(reports[0].program_name, "TESTDSL");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

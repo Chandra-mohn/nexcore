@@ -590,6 +590,7 @@ pub fn manifest_to_toml(manifest: &Manifest) -> String {
 
     for (crate_name, info) in &manifest.programs {
         let _ = writeln!(out, "[programs.{crate_name}]");
+        let _ = writeln!(out, "program_id = \"{}\"", info.program_id);
         let _ = writeln!(out, "source = \"{}\"", info.source.display());
         let _ = write!(out, "type = \"{}\"", info.program_type);
         if info.overridden {

@@ -68,6 +68,9 @@ pub struct RustifyConfig {
     pub emit_mode: EmitMode,
     /// Per-emitter overrides for direct path.
     pub emitter_overrides: EmitterOverrides,
+    /// Root directory of original COBOL sources (required for direct/compare emit modes).
+    /// Combined with paths from cobol2rust-manifest.toml to locate .cbl files.
+    pub cobol_source_dir: Option<PathBuf>,
 }
 
 /// Report output format.
@@ -96,6 +99,7 @@ impl Default for RustifyConfig {
             emit_dsl: false,
             emit_mode: EmitMode::Legacy,
             emitter_overrides: EmitterOverrides::default(),
+            cobol_source_dir: None,
         }
     }
 }

@@ -81,6 +81,11 @@ pub struct RustifyArgs {
     /// Overrides --emit-mode for the named emitters.
     #[arg(long, value_delimiter = ',')]
     pub direct_emitters: Vec<String>,
+
+    /// Root directory of original COBOL sources (required for --emit-mode direct/compare).
+    /// Paths in cobol2rust-manifest.toml are resolved relative to this directory.
+    #[arg(long)]
+    pub cobol_source: Option<PathBuf>,
 }
 
 /// Execute the rustify subcommand.
@@ -192,6 +197,7 @@ pub fn run(cli: &Cli, args: &RustifyArgs) -> Result<ExitCode> {
         emit_dsl: args.emit_dsl,
         emit_mode,
         emitter_overrides,
+        cobol_source_dir: args.cobol_source.clone(),
     };
 
     // If --output provided, run apply mode; otherwise report mode
@@ -222,7 +228,7 @@ pub fn run(cli: &Cli, args: &RustifyArgs) -> Result<ExitCode> {
         );
     } else if args.emit_dsl {
         // DSL-only mode: emit DSL without applying tier transforms
-        let dsl_reports = cobol_rustify::emit_dsl_for_workspace(&config.source_dir)
+        let dsl_reports = cobol_rustify::emit_dsl_for_workspace(&config, &config.source_dir)
             .into_diagnostic()?;
 
         let total_files: usize = dsl_reports.iter().map(|r| r.total_files).sum();
