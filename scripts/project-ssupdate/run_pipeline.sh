@@ -101,9 +101,8 @@ echo "PHASE 2: DSL Emission (${EMIT_MODE} mode)"
 echo "=========================================="
 T=$(date +%s)
 
-# --- Mode A: DSL-only (no tier transforms) ---
-$NEXMIG rustify "$WS_OUT" \
-    --emit-dsl \
+# --- Mode A: DSL-only (target-agnostic, no tier transforms) ---
+$NEXMIG dsl "$WS_OUT" \
     --emit-mode "$EMIT_MODE" \
     --cobol-source "$COBOL_DIR" \
     -j "$JOBS"

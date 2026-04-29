@@ -16,6 +16,7 @@ mod compile_cmd;
 mod corpus_cmd;
 mod data_analyze_cmd;
 mod decode_cmd;
+mod dsl_cmd;
 mod diagnose_cmd;
 mod diff_cmd;
 mod discover_cmd;
@@ -114,6 +115,8 @@ pub enum Command {
     Report(scan::args::ReportArgs),
     /// Transform transpiled Rust into idiomatic Rust (Phase 2 rustification).
     Rustify(rustify_cmd::RustifyArgs),
+    /// Emit NexFlow DSL files from COBOL sources (target-agnostic).
+    Dsl(dsl_cmd::DslArgs),
     /// Decode binary COBOL dataset records to JSON/CSV.
     Decode(decode_cmd::DecodeArgs),
     /// Auto-match binary data files to copybooks.
@@ -182,6 +185,7 @@ fn main() -> ExitCode {
         Command::Status(ref args) => scan::run_status(args),
         Command::Report(ref args) => scan::run_report(args),
         Command::Rustify(ref args) => rustify_cmd::run(&cli, args),
+        Command::Dsl(ref args) => dsl_cmd::run(&cli, args),
         Command::Decode(ref args) => decode_cmd::run(&cli, args),
         Command::Discover(ref args) => discover_cmd::run(&cli, args),
         Command::DataAnalyze(ref args) => data_analyze_cmd::run(&cli, args),
