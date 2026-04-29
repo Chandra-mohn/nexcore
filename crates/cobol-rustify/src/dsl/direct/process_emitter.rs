@@ -51,7 +51,64 @@ impl DirectDslEmitter for DirectProcessEmitter {
             return vec![];
         }
 
-        let (content, notes, confidence) = generate_process_file(&graph, &ctx.program_name, None);
+        // Collect COBOL patterns for DSL annotation
+        let mut patterns = std::collections::HashSet::new();
+        for section in &proc_div.sections {
+            for para in &section.paragraphs {
+                for sentence in &para.sentences {
+                    for stmt in &sentence.statements {
+                        super::cobol_extract::collect_patterns(stmt, &mut patterns);
+                    }
+                }
+            }
+        }
+        for para in &proc_div.paragraphs {
+            for sentence in &para.sentences {
+                for stmt in &sentence.statements {
+                    super::cobol_extract::collect_patterns(stmt, &mut patterns);
+                }
+            }
+        }
+
+        let (content, mut notes, confidence) = generate_process_file(&graph, &ctx.program_name, None);
+
+        // Add pattern annotations as review notes
+        for pattern in &patterns {
+            use super::cobol_extract::CobolPattern;
+            match pattern {
+                CobolPattern::ExternalCall { program } => {
+                    notes.push(format!(
+                        "CALL '{program}': map to external service invocation or invoke step"
+                    ));
+                }
+                CobolPattern::Sort { file_name } => {
+                    notes.push(format!(
+                        "SORT '{file_name}': map to sort step or database ORDER BY"
+                    ));
+                }
+                CobolPattern::Merge { file_name } => {
+                    notes.push(format!(
+                        "MERGE '{file_name}': map to merge step or UNION query"
+                    ));
+                }
+                CobolPattern::AcceptInput => {
+                    notes.push(
+                        "ACCEPT: I/O boundary -- map to receive block or user input".to_string()
+                    );
+                }
+                CobolPattern::DisplayOutput => {
+                    notes.push(
+                        "DISPLAY: I/O boundary -- map to emit/log block or console output".to_string()
+                    );
+                }
+                CobolPattern::StringInspect | CobolPattern::StringConcat | CobolPattern::StringSplit => {
+                    // Handled by transform emitter
+                }
+            }
+        }
+
+        // Lower confidence when patterns need manual review
+        let pattern_confidence = if patterns.is_empty() { confidence } else { confidence * 0.85 };
 
         vec![DslFile {
             path: format!(
@@ -59,7 +116,7 @@ impl DirectDslEmitter for DirectProcessEmitter {
                 sanitize_identifier(&ctx.program_name.to_lowercase())
             ),
             content,
-            confidence,
+            confidence: pattern_confidence,
             notes,
             source_fields: graph.nodes.iter().map(|n| n.cobol_name.clone()).collect(),
         }]

@@ -85,6 +85,67 @@ impl DirectDslEmitter for DirectTransformEmitter {
             });
         }
 
+        // Detect string operation patterns and emit review-noted transforms
+        let mut patterns = std::collections::HashSet::new();
+        for section in &proc_div.sections {
+            for para in &section.paragraphs {
+                for sentence in &para.sentences {
+                    for stmt in &sentence.statements {
+                        super::cobol_extract::collect_patterns(stmt, &mut patterns);
+                    }
+                }
+            }
+        }
+
+        let has_string_ops = patterns.iter().any(|p| matches!(
+            p,
+            super::cobol_extract::CobolPattern::StringInspect
+                | super::cobol_extract::CobolPattern::StringConcat
+                | super::cobol_extract::CobolPattern::StringSplit
+        ));
+
+        if has_string_ops {
+            use crate::dsl::dsl_ast::*;
+
+            let mut string_notes = Vec::new();
+            for pattern in &patterns {
+                use super::cobol_extract::CobolPattern;
+                match pattern {
+                    CobolPattern::StringInspect => {
+                        string_notes.push("INSPECT: regex/replace mapping needed".to_string());
+                    }
+                    CobolPattern::StringConcat => {
+                        string_notes.push("STRING: concatenation -> format!/join mapping needed".to_string());
+                    }
+                    CobolPattern::StringSplit => {
+                        string_notes.push("UNSTRING: split/parse mapping needed".to_string());
+                    }
+                    _ => {}
+                }
+            }
+
+            let xform_content = format!(
+                "// String operation transforms (manual mapping required)\n\
+                 // Detected patterns:\n{}\n\
+                 transform {}_string_ops {{\n\
+                 \n  // TODO: map COBOL string operations to Rust equivalents\n\
+                 \n  apply {{\n    // placeholder\n  }}\n}}\n",
+                string_notes.iter().map(|n| format!("//   - {n}\n")).collect::<String>(),
+                sanitize_identifier(&ctx.program_name.to_lowercase()),
+            );
+
+            dsl_files.push(DslFile {
+                path: format!(
+                    "transform/{}_string_ops.xform",
+                    sanitize_identifier(&ctx.program_name.to_lowercase())
+                ),
+                content: xform_content,
+                confidence: 0.3,
+                notes: string_notes,
+                source_fields: vec![ctx.program_name.clone()],
+            });
+        }
+
         dsl_files
     }
 }

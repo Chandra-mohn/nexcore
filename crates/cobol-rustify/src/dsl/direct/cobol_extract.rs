@@ -14,6 +14,28 @@ use cobol_transpiler::ast::{
 use crate::dsl::schema_emitter::{self, SchemaField};
 use crate::dsl::type_mapping::{pic_to_nexflow_type, NexflowType};
 
+/// COBOL statement patterns detected during analysis.
+/// Used by emitters to generate targeted DSL constructs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CobolPattern {
+    /// CALL 'PROGRAM-NAME' USING ... (external program invocation)
+    ExternalCall { program: String },
+    /// INSPECT ... TALLYING / REPLACING / CONVERTING
+    StringInspect,
+    /// STRING ... DELIMITED BY ... INTO ...
+    StringConcat,
+    /// UNSTRING ... DELIMITED BY ... INTO ...
+    StringSplit,
+    /// SORT file-name ON KEY ...
+    Sort { file_name: String },
+    /// MERGE file-name ON KEY ...
+    Merge { file_name: String },
+    /// ACCEPT field FROM source
+    AcceptInput,
+    /// DISPLAY field UPON target
+    DisplayOutput,
+}
+
 /// Convert a COBOL name to snake_case.
 /// "WS-ACCT-NUMBER" -> "ws_acct_number"
 pub fn cobol_name_to_snake(name: &str) -> String {
@@ -330,12 +352,104 @@ pub fn analyze_statement(
             if let Some(name) = operand_field_name(&call.program) {
                 performs.push(name);
             }
+            for param in &call.using {
+                if let Some(ref op) = param.operand {
+                    if let Some(name) = operand_field_name(op) {
+                        reads.insert(name);
+                    }
+                }
+            }
         }
         Statement::String(s) => {
             writes.insert(s.into.name.clone());
+            for src in &s.sources {
+                if let Some(name) = operand_field_name(&src.operand) {
+                    reads.insert(name);
+                }
+            }
         }
         Statement::Unstring(u) => {
             reads.insert(u.source.name.clone());
+            for dest in &u.into {
+                writes.insert(dest.target.name.clone());
+            }
+        }
+        Statement::Inspect(insp) => {
+            reads.insert(insp.target.name.clone());
+            if !insp.replacing.is_empty() || insp.converting.is_some() {
+                writes.insert(insp.target.name.clone());
+            }
+        }
+        Statement::Sort(sort) => {
+            reads.insert(sort.file_name.clone());
+        }
+        Statement::Merge(merge) => {
+            for f in &merge.using {
+                reads.insert(f.clone());
+            }
+        }
+        Statement::Accept(accept) => {
+            writes.insert(accept.target.name.clone());
+        }
+        Statement::Display(display) => {
+            for op in &display.items {
+                if let Some(name) = operand_field_name(op) {
+                    reads.insert(name);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extended analysis that also collects COBOL patterns for DSL annotation.
+pub fn collect_patterns(stmt: &Statement, patterns: &mut HashSet<CobolPattern>) {
+    match stmt {
+        Statement::Call(call) => {
+            let program = operand_field_name(&call.program)
+                .unwrap_or_else(|| "UNKNOWN".to_string());
+            patterns.insert(CobolPattern::ExternalCall { program });
+        }
+        Statement::String(_) => {
+            patterns.insert(CobolPattern::StringConcat);
+        }
+        Statement::Unstring(_) => {
+            patterns.insert(CobolPattern::StringSplit);
+        }
+        Statement::Inspect(_) => {
+            patterns.insert(CobolPattern::StringInspect);
+        }
+        Statement::Sort(sort) => {
+            patterns.insert(CobolPattern::Sort { file_name: sort.file_name.clone() });
+        }
+        Statement::Merge(merge) => {
+            patterns.insert(CobolPattern::Merge { file_name: merge.file_name.clone() });
+        }
+        Statement::Accept(_) => {
+            patterns.insert(CobolPattern::AcceptInput);
+        }
+        Statement::Display(_) => {
+            patterns.insert(CobolPattern::DisplayOutput);
+        }
+        Statement::If(if_stmt) => {
+            for s in &if_stmt.then_body {
+                collect_patterns(s, patterns);
+            }
+            for s in &if_stmt.else_body {
+                collect_patterns(s, patterns);
+            }
+        }
+        Statement::Evaluate(eval) => {
+            for branch in &eval.when_branches {
+                for s in &branch.body {
+                    collect_patterns(s, patterns);
+                }
+            }
+        }
+        Statement::Perform(perf) => {
+            for s in &perf.body {
+                collect_patterns(s, patterns);
+            }
         }
         _ => {}
     }
