@@ -10,6 +10,8 @@ pub mod direct;
 pub mod dsl_ast;
 pub mod expr_extract;
 #[cfg(test)]
+mod grammar_validation_test;
+#[cfg(test)]
 mod integration_test;
 pub mod process_emitter;
 pub mod rules_emitter;
