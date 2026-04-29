@@ -85,6 +85,7 @@ pub fn extract_redefines_schemas(
                 fields,
                 nested_objects: vec![],
                 constraints,
+                streaming: None,
             }],
         };
 

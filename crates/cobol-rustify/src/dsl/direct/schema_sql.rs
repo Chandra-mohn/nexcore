@@ -138,6 +138,7 @@ pub fn extract_sql_schemas(
                 fields,
                 nested_objects: vec![],
                 constraints: vec![],
+                    streaming: None,
             }],
         };
 

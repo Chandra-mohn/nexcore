@@ -173,6 +173,7 @@ pub fn extract_occurs_schemas(
                 fields,
                 nested_objects: vec![],
                 constraints,
+                streaming: None,
             }],
         };
 

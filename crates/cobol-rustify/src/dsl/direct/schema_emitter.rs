@@ -134,6 +134,7 @@ impl DirectDslEmitter for DirectSchemaEmitter {
                         fields: flat_fields,
                         nested_objects: vec![],
                         constraints: flat_constraints,
+                    streaming: None,
                     }],
                 };
 
@@ -239,6 +240,7 @@ fn emit_file_schemas(
                 fields,
                 nested_objects,
                 constraints,
+                streaming: None,
             }],
         };
 
@@ -327,6 +329,7 @@ fn emit_group_schema(entry: &DataEntry, program: &str) -> Vec<DslFile> {
                 fields,
                 nested_objects,
                 constraints,
+                streaming: None,
             }],
         };
 
@@ -384,6 +387,7 @@ fn emit_linkage_schema(entry: &DataEntry, program: &str) -> Vec<DslFile> {
             fields,
             nested_objects,
             constraints,
+            streaming: None,
         }],
     };
 
@@ -496,6 +500,7 @@ fn extract_co_access_schemas(
                 fields,
                 nested_objects: vec![],
                 constraints,
+                streaming: None,
             }],
         };
 

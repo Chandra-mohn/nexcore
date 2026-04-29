@@ -186,6 +186,17 @@ pub struct SchemaDef {
     pub fields: Vec<FieldDecl>,
     pub nested_objects: Vec<NestedObjectDef>,
     pub constraints: Vec<SchemaConstraint>,
+    /// Optional streaming semantics block (for event_log patterns).
+    pub streaming: Option<StreamingBlock>,
+}
+
+/// Streaming semantics block for event-pattern schemas.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamingBlock {
+    /// Field used as event time (e.g., "transaction_date").
+    pub event_time: Ident,
+    /// Optional watermark strategy.
+    pub watermark: Option<String>,
 }
 
 /// A nested object block: `name object ... end` or `name list<object> ... end`
@@ -827,6 +838,16 @@ impl SchemaDef {
             let _ = writeln!(out, "{}end", indent(1));
         }
 
+        if let Some(ref streaming) = self.streaming {
+            out.push('\n');
+            let _ = writeln!(out, "{}streaming", indent(1));
+            let _ = writeln!(out, "{}event_time: {}", indent(2), streaming.event_time);
+            if let Some(ref wm) = streaming.watermark {
+                let _ = writeln!(out, "{}watermark: \"{wm}\"", indent(2));
+            }
+            let _ = writeln!(out, "{}end", indent(1));
+        }
+
         let _ = writeln!(out, "end");
         out
     }
@@ -1414,6 +1435,7 @@ mod tests {
                     Ident::new("acct_type"),
                     vec!["S".to_string(), "C".to_string()],
                 )],
+                streaming: None,
             }],
         };
 
