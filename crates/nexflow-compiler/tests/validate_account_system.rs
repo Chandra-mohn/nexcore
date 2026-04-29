@@ -34,6 +34,9 @@ fn validate_account_system_is_consistent() {
         apis: &[api],
         services: &[service],
         schemas: &all_schemas,
+        transforms: &[],
+        rules: &[],
+        procs: &[],
     };
     let result = nexflow_compiler::validate(&input);
 
@@ -77,6 +80,9 @@ fn validate_detects_missing_schema() {
         apis: &[api],
         services: &[],
         schemas: &program.schemas,
+        transforms: &[],
+        rules: &[],
+        procs: &[],
     };
     let result = nexflow_compiler::validate(&input);
 
@@ -105,6 +111,9 @@ fn validate_api_without_service_warns() {
         apis: &[api],
         services: &[],
         schemas: &[],
+        transforms: &[],
+        rules: &[],
+        procs: &[],
     };
     let result = nexflow_compiler::validate(&input);
 

@@ -56,6 +56,9 @@ pub enum DiagnosticSource {
     Api,
     Service,
     Schema,
+    Transform,
+    Rules,
+    Process,
     CrossGrammar,
 }
 
@@ -65,6 +68,9 @@ impl fmt::Display for DiagnosticSource {
             Self::Api => write!(f, "api"),
             Self::Service => write!(f, "service"),
             Self::Schema => write!(f, "schema"),
+            Self::Transform => write!(f, "transform"),
+            Self::Rules => write!(f, "rules"),
+            Self::Process => write!(f, "process"),
             Self::CrossGrammar => write!(f, "cross"),
         }
     }

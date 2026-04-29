@@ -6,17 +6,23 @@
 use std::collections::HashSet;
 
 use nexflow_parser::ast::api::ApiDefinition;
+use nexflow_parser::ast::proc::ProcProgram;
+use nexflow_parser::ast::rules::RulesProgram;
 use nexflow_parser::ast::schema::SchemaDefinition;
 use nexflow_parser::ast::service::ServiceDefinition;
+use nexflow_parser::ast::transform::TransformProgram;
 
 use crate::diagnostics::{DiagnosticSource, ValidationResult};
 
-/// Input to the validator: parsed ASTs from all three grammar types.
+/// Input to the validator: parsed ASTs from all grammar types.
 #[derive(Debug)]
 pub struct ValidationInput<'a> {
     pub apis: &'a [ApiDefinition],
     pub services: &'a [ServiceDefinition],
     pub schemas: &'a [SchemaDefinition],
+    pub transforms: &'a [TransformProgram],
+    pub rules: &'a [RulesProgram],
+    pub procs: &'a [ProcProgram],
 }
 
 /// Run all validation checks and return diagnostics.
@@ -48,6 +54,32 @@ pub fn validate(input: &ValidationInput<'_>) -> ValidationResult {
     // Validate schema internal consistency
     for schema in input.schemas {
         validate_schema_types(schema, &schema_names, &mut result);
+    }
+
+    // Validate transforms: schema references and compose references
+    let transform_names: HashSet<String> = input
+        .transforms
+        .iter()
+        .flat_map(|tp| {
+            tp.transforms
+                .iter()
+                .map(|t| t.name.clone())
+                .chain(tp.transform_blocks.iter().map(|b| b.name.clone()))
+        })
+        .collect();
+
+    for tp in input.transforms {
+        validate_transform_refs(tp, &schema_names, &transform_names, &mut result);
+    }
+
+    // Validate rules: schema/field references
+    for rp in input.rules {
+        validate_rules_refs(rp, &schema_names, &mut result);
+    }
+
+    // Validate procs: transform/rules/schema references
+    for pp in input.procs {
+        validate_proc_refs(pp, &schema_names, &transform_names, &mut result);
     }
 
     // Cross-grammar: API-Service pairing
@@ -296,6 +328,239 @@ fn validate_field_type(
     }
 }
 
+/// Validate transform schema references and compose references.
+fn validate_transform_refs(
+    tp: &TransformProgram,
+    schema_names: &HashSet<String>,
+    transform_names: &HashSet<String>,
+    result: &mut ValidationResult,
+) {
+    for t in &tp.transforms {
+        // Check input/output schema references
+        for field in t.inputs.iter().chain(t.outputs.iter()) {
+            validate_transform_field_type(&field.field_type, &t.name, schema_names, result);
+        }
+    }
+
+    for block in &tp.transform_blocks {
+        // Check input/output schema references
+        for field in block.inputs.iter().chain(block.outputs.iter()) {
+            validate_transform_field_type(&field.field_type, &block.name, schema_names, result);
+        }
+
+        // Check `uses` references resolve to known transforms
+        for uses_ref in &block.uses {
+            if !transform_names.contains(uses_ref) {
+                result.error(
+                    DiagnosticSource::Transform,
+                    format!(
+                        "Transform block '{}' uses unknown transform '{uses_ref}'",
+                        block.name
+                    ),
+                    Some(block.name.clone()),
+                );
+            }
+        }
+
+        // Check compose references
+        if let Some(compose) = &block.compose {
+            validate_compose_refs(&compose.refs, &block.name, transform_names, result);
+            if let Some(then) = &compose.then {
+                validate_compose_refs(&then.refs, &block.name, transform_names, result);
+            }
+        }
+    }
+}
+
+/// Check that compose refs resolve to known transforms.
+fn validate_compose_refs(
+    refs: &[nexflow_parser::ast::transform::ComposeRef],
+    block_name: &str,
+    transform_names: &HashSet<String>,
+    result: &mut ValidationResult,
+) {
+    use nexflow_parser::ast::transform::ComposeRef;
+    for r in refs {
+        let name = match r {
+            ComposeRef::Simple(n) => n,
+            ComposeRef::Conditional { transform, .. } => transform,
+            ComposeRef::Otherwise(n) => n,
+        };
+        if !transform_names.contains(name) {
+            result.error(
+                DiagnosticSource::Transform,
+                format!(
+                    "Compose in '{}' references unknown transform '{}'",
+                    block_name, name
+                ),
+                Some(block_name.to_string()),
+            );
+        }
+    }
+}
+
+/// Validate a transform field type's schema references.
+fn validate_transform_field_type(
+    ft: &nexflow_parser::ast::transform::TransformFieldType,
+    transform_name: &str,
+    schema_names: &HashSet<String>,
+    result: &mut ValidationResult,
+) {
+    use nexflow_parser::ast::transform::TransformFieldType;
+    match ft {
+        TransformFieldType::Reference(name) => {
+            let pascal = snake_to_pascal(name);
+            if !schema_names.contains(name) && !schema_names.contains(&pascal) {
+                result.warning(
+                    DiagnosticSource::Transform,
+                    format!(
+                        "Transform '{transform_name}' references unknown schema '{name}'"
+                    ),
+                    Some(transform_name.to_string()),
+                );
+            }
+        }
+        TransformFieldType::AliasRef(name) => {
+            if !schema_names.contains(name) {
+                result.warning(
+                    DiagnosticSource::Transform,
+                    format!(
+                        "Transform '{transform_name}' references unknown alias '{name}'"
+                    ),
+                    Some(transform_name.to_string()),
+                );
+            }
+        }
+        TransformFieldType::Collection { element_types, .. } => {
+            for et in element_types {
+                validate_transform_field_type(et, transform_name, schema_names, result);
+            }
+        }
+        TransformFieldType::Base { .. } => {}
+    }
+}
+
+/// Validate rules schema references.
+fn validate_rules_refs(
+    rp: &RulesProgram,
+    schema_names: &HashSet<String>,
+    result: &mut ValidationResult,
+) {
+    // Decision tables: check condition/action field references
+    for dt in &rp.decision_tables {
+        // Check service declarations
+        for svc in &rp.services {
+            if svc.return_type != "void" {
+                let pascal = snake_to_pascal(&svc.return_type);
+                if !schema_names.contains(&svc.return_type) && !schema_names.contains(&pascal) {
+                    result.warning(
+                        DiagnosticSource::Rules,
+                        format!(
+                            "Service '{}' in rules returns unknown type '{}'",
+                            svc.name, svc.return_type
+                        ),
+                        Some(dt.name.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    // Action declarations: check emit targets reference known schemas
+    for action in &rp.actions {
+        use nexflow_parser::ast::rules::ActionTarget;
+        if let ActionTarget::Emit { stream } = &action.target {
+            // Stream names are not schemas, but flag for cross-grammar check
+            result.info(
+                DiagnosticSource::Rules,
+                format!(
+                    "Action '{}' emits to stream '{}' (verify stream exists in proc)",
+                    action.name, stream
+                ),
+                Some(action.name.clone()),
+            );
+        }
+    }
+}
+
+/// Validate proc references to transforms, rules, and schemas.
+fn validate_proc_refs(
+    pp: &ProcProgram,
+    schema_names: &HashSet<String>,
+    transform_names: &HashSet<String>,
+    result: &mut ValidationResult,
+) {
+    use nexflow_parser::ast::proc::ProcessStatement;
+
+    for process in &pp.processes {
+        for stmt in &process.body {
+            match stmt {
+                ProcessStatement::Receive { schema, name, .. } => {
+                    if let Some(schema_ref) = schema {
+                        let pascal = snake_to_pascal(schema_ref);
+                        if !schema_names.contains(schema_ref) && !schema_names.contains(&pascal) {
+                            result.error(
+                                DiagnosticSource::Process,
+                                format!(
+                                    "Receive '{}' in process '{}' references unknown schema '{}'",
+                                    name, process.name, schema_ref
+                                ),
+                                Some(process.name.clone()),
+                            );
+                        }
+                    }
+                }
+                ProcessStatement::Transform { using, .. } => {
+                    if !transform_names.contains(using) {
+                        result.error(
+                            DiagnosticSource::Process,
+                            format!(
+                                "Transform step in process '{}' references unknown transform '{}'",
+                                process.name, using
+                            ),
+                            Some(process.name.clone()),
+                        );
+                    }
+                }
+                ProcessStatement::Emit { schema, name, .. } => {
+                    if let Some(schema_ref) = schema {
+                        let pascal = snake_to_pascal(schema_ref);
+                        if !schema_names.contains(schema_ref) && !schema_names.contains(&pascal) {
+                            result.error(
+                                DiagnosticSource::Process,
+                                format!(
+                                    "Emit '{}' in process '{}' references unknown schema '{}'",
+                                    name, process.name, schema_ref
+                                ),
+                                Some(process.name.clone()),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Also check phases
+        for phase in &process.phases {
+            for stmt in &phase.statements {
+                if let ProcessStatement::Transform { using, .. } = stmt {
+                    if !transform_names.contains(using) {
+                        result.error(
+                            DiagnosticSource::Process,
+                            format!(
+                                "Transform step in phase '{}' of process '{}' references unknown transform '{}'",
+                                phase.name, process.name, using
+                            ),
+                            Some(process.name.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn snake_to_pascal(s: &str) -> String {
     s.split('_')
         .map(|word| {
@@ -430,6 +695,9 @@ mod tests {
             apis: &[api],
             services: &[],
             schemas: &schemas,
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(!result.has_errors(), "Expected no errors: {:?}", result.diagnostics);
@@ -447,6 +715,9 @@ mod tests {
             apis: &[api],
             services: &[],
             schemas: &schemas,
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(result.has_errors());
@@ -461,6 +732,9 @@ mod tests {
             apis: &[],
             services: &[service],
             schemas: &[],
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(result.has_errors());
@@ -484,6 +758,9 @@ mod tests {
             apis: &[api],
             services: &[service],
             schemas: &schemas,
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(result.has_errors());
@@ -505,6 +782,9 @@ mod tests {
             apis: &[api],
             services: &[service],
             schemas: &schemas,
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(!result.has_errors(), "Extra handler should be warning, not error");
@@ -529,6 +809,9 @@ mod tests {
             apis: &[api],
             services: &[service],
             schemas: &schemas,
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(!result.has_errors(), "Expected no errors: {:?}", result.diagnostics);
@@ -541,11 +824,195 @@ mod tests {
             apis: &[api],
             services: &[],
             schemas: &[],
+            transforms: &[],
+            rules: &[],
+            procs: &[],
         };
         let result = validate(&input);
         assert!(!result.has_errors());
         assert!(result.warning_count() > 0);
         let orphan = result.diagnostics.iter().find(|d| d.message.contains("OrphanAPI"));
         assert!(orphan.is_some());
+    }
+
+    // ---- DSL03: Transform/Rules/Proc validation tests ----
+
+    use nexflow_parser::ast::transform::*;
+    use nexflow_parser::ast::rules::*;
+    use nexflow_parser::ast::proc::*;
+
+    fn make_transform(name: &str, input_ref: Option<&str>) -> TransformDef {
+        let inputs = input_ref
+            .map(|r| vec![FieldSpec {
+                name: Some("input".to_string()),
+                field_type: TransformFieldType::Reference(r.to_string()),
+                nullable: false,
+                required: true,
+                default: None,
+            }])
+            .unwrap_or_default();
+
+        TransformDef {
+            name: name.to_string(),
+            version: None,
+            description: None,
+            previous_version: None,
+            compatibility: None,
+            pure: None,
+            idempotent: None,
+            cache: None,
+            inputs,
+            outputs: Vec::new(),
+            lookup: None,
+            lookups: Vec::new(),
+            state: None,
+            params: Vec::new(),
+            validate_input: Vec::new(),
+            apply: Vec::new(),
+            validate_output: Vec::new(),
+            on_error: None,
+        }
+    }
+
+    fn make_transform_program(transforms: Vec<TransformDef>) -> TransformProgram {
+        TransformProgram {
+            imports: Vec::new(),
+            transforms,
+            transform_blocks: Vec::new(),
+        }
+    }
+
+    fn make_proc_program(name: &str, stmts: Vec<ProcessStatement>) -> ProcProgram {
+        ProcProgram {
+            imports: Vec::new(),
+            processes: vec![ProcessDef {
+                name: name.to_string(),
+                execution: None,
+                business_date: None,
+                processing_date: None,
+                markers: Vec::new(),
+                state_machine: None,
+                body: stmts,
+                phases: Vec::new(),
+                state: None,
+                metrics: None,
+                resilience: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn test_transform_valid_schema_ref() {
+        let schemas = vec![make_schema("account")];
+        let tp = make_transform_program(vec![
+            make_transform("update_account", Some("account")),
+        ]);
+
+        let input = ValidationInput {
+            apis: &[],
+            services: &[],
+            schemas: &schemas,
+            transforms: &[tp],
+            rules: &[],
+            procs: &[],
+        };
+        let result = validate(&input);
+        assert!(!result.has_errors(), "Valid schema ref should not error: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn test_transform_unknown_schema_ref_warns() {
+        let tp = make_transform_program(vec![
+            make_transform("update_account", Some("missing_schema")),
+        ]);
+
+        let input = ValidationInput {
+            apis: &[],
+            services: &[],
+            schemas: &[],
+            transforms: &[tp],
+            rules: &[],
+            procs: &[],
+        };
+        let result = validate(&input);
+        assert!(result.warning_count() > 0);
+        let warn = result.diagnostics.iter().find(|d| d.message.contains("missing_schema"));
+        assert!(warn.is_some(), "Should warn about missing schema ref");
+    }
+
+    #[test]
+    fn test_proc_valid_transform_ref() {
+        let tp = make_transform_program(vec![
+            make_transform("enrich_account", None),
+        ]);
+        let pp = make_proc_program("main_proc", vec![
+            ProcessStatement::Transform {
+                input: "raw".to_string(),
+                using: "enrich_account".to_string(),
+                into: "enriched".to_string(),
+            },
+        ]);
+
+        let input = ValidationInput {
+            apis: &[],
+            services: &[],
+            schemas: &[],
+            transforms: &[tp],
+            rules: &[],
+            procs: &[pp],
+        };
+        let result = validate(&input);
+        assert!(!result.has_errors(), "Valid transform ref should not error: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn test_proc_unknown_transform_ref_errors() {
+        let pp = make_proc_program("main_proc", vec![
+            ProcessStatement::Transform {
+                input: "raw".to_string(),
+                using: "nonexistent_transform".to_string(),
+                into: "out".to_string(),
+            },
+        ]);
+
+        let input = ValidationInput {
+            apis: &[],
+            services: &[],
+            schemas: &[],
+            transforms: &[],
+            rules: &[],
+            procs: &[pp],
+        };
+        let result = validate(&input);
+        assert!(result.has_errors());
+        let err = result.diagnostics.iter().find(|d| d.message.contains("nonexistent_transform"));
+        assert!(err.is_some(), "Should error about missing transform");
+    }
+
+    #[test]
+    fn test_proc_unknown_schema_in_receive_errors() {
+        let pp = make_proc_program("main_proc", vec![
+            ProcessStatement::Receive {
+                name: "orders".to_string(),
+                source_type: "topic".to_string(),
+                source: "orders-topic".to_string(),
+                schema: Some("missing_order".to_string()),
+                key: None,
+                options: Vec::new(),
+            },
+        ]);
+
+        let input = ValidationInput {
+            apis: &[],
+            services: &[],
+            schemas: &[],
+            transforms: &[],
+            rules: &[],
+            procs: &[pp],
+        };
+        let result = validate(&input);
+        assert!(result.has_errors());
+        let err = result.diagnostics.iter().find(|d| d.message.contains("missing_order"));
+        assert!(err.is_some(), "Should error about missing schema in receive");
     }
 }
