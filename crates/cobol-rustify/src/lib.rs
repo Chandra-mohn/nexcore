@@ -322,7 +322,13 @@ pub fn apply_workspace(config: &RustifyConfig) -> Result<ApplyReport, RustifyErr
 
     // Step 8: Emit Nexflow DSL files (Tier 5) if requested
     if config.emit_dsl {
-        emit_dsl_for_workspace(config, &output_dir)?;
+        // Filter assessment-only transforms (Tier 3) for emitter context
+        let assessments: Vec<_> = all_transforms
+            .iter()
+            .filter(|t| matches!(t.safety, rules::transform::Safety::Assessment))
+            .cloned()
+            .collect();
+        emit_dsl_for_workspace_with_assessments(config, &output_dir, &assessments)?;
     }
 
     Ok(ApplyReport {
@@ -439,6 +445,16 @@ pub fn emit_dsl_for_workspace(
     config: &RustifyConfig,
     output_dir: &Path,
 ) -> Result<Vec<dsl::writer::DslWriteReport>, RustifyError> {
+    emit_dsl_for_workspace_with_assessments(config, output_dir, &[])
+}
+
+/// Like `emit_dsl_for_workspace` but also passes Tier 3 assessment results
+/// to emitters for richer DSL output.
+pub fn emit_dsl_for_workspace_with_assessments(
+    config: &RustifyConfig,
+    output_dir: &Path,
+    assessments: &[rules::transform::Transform],
+) -> Result<Vec<dsl::writer::DslWriteReport>, RustifyError> {
     let needs_direct = config.emit_mode != config::EmitMode::Legacy
         || !config.emitter_overrides.is_empty();
 
@@ -509,12 +525,21 @@ pub fn emit_dsl_for_workspace(
         // Resolve per-program target config overrides
         let resolved_target = target_config::resolve_for_program(&target_config, &program_name);
 
+        // Filter assessments for this file
+        let file_assessments: Vec<_> = assessments
+            .iter()
+            .filter(|a| {
+                a.file.to_string_lossy().replace('\\', "/").ends_with(&rel_path)
+            })
+            .cloned()
+            .collect();
+
         let legacy_ctx = dsl::EmitterContext {
             program_name: program_name.clone(),
             syn_file: &syn_file,
             source_text: &source_text,
             hints: file_hints,
-            assessments: &[],
+            assessments: &file_assessments,
             target: Some(&resolved_target),
             source_path: rs_path.clone(),
         };
