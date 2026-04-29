@@ -46,8 +46,8 @@ pub struct DslFileEntry {
 
 /// Write all DSL files to disk under `<output_dir>/dsl/`.
 ///
-/// Creates the directory structure and writes a `dsl_manifest.json`
-/// summarizing what was generated.
+/// Creates the directory structure and returns a report. Does NOT write the
+/// manifest -- call `write_workspace_manifest()` after collecting all reports.
 pub fn write_dsl_files(
     output_dir: &Path,
     program_name: &str,
@@ -98,22 +98,77 @@ pub fn write_dsl_files(
         0.0
     };
 
-    let report = DslWriteReport {
+    Ok(DslWriteReport {
         source_file: source_file.to_string(),
         program_name: program_name.to_string(),
         files: entries,
         total_files: total,
         avg_confidence,
         review_notes: all_notes,
+    })
+}
+
+/// Aggregated workspace manifest covering all programs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceManifest {
+    /// Per-program reports.
+    pub programs: Vec<DslWriteReport>,
+    /// Total DSL files across all programs.
+    pub total_files: usize,
+    /// Average confidence across all programs.
+    pub avg_confidence: f64,
+    /// Total programs processed.
+    pub total_programs: usize,
+    /// Programs that failed emission (name + error message).
+    pub errors: Vec<ProgramError>,
+}
+
+/// A program that failed DSL emission.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramError {
+    /// Program name or source file.
+    pub program: String,
+    /// Error description.
+    pub error: String,
+}
+
+/// Write an aggregated workspace manifest covering all programs.
+///
+/// Writes `<output_dir>/dsl/dsl_manifest.json` once, after all programs
+/// have been processed.
+pub fn write_workspace_manifest(
+    output_dir: &Path,
+    reports: &[DslWriteReport],
+    errors: &[ProgramError],
+) -> Result<(), RustifyError> {
+    let dsl_dir = output_dir.join("dsl");
+    std::fs::create_dir_all(&dsl_dir)?;
+
+    let total_files: usize = reports.iter().map(|r| r.total_files).sum();
+    let avg_confidence = if total_files > 0 {
+        let weighted: f64 = reports
+            .iter()
+            .map(|r| r.avg_confidence * r.total_files as f64)
+            .sum();
+        weighted / total_files as f64
+    } else {
+        0.0
     };
 
-    // Write manifest
+    let manifest = WorkspaceManifest {
+        programs: reports.to_vec(),
+        total_files,
+        avg_confidence,
+        total_programs: reports.len(),
+        errors: errors.to_vec(),
+    };
+
     let manifest_path = dsl_dir.join("dsl_manifest.json");
-    let json = serde_json::to_string_pretty(&report)
+    let json = serde_json::to_string_pretty(&manifest)
         .map_err(|e| RustifyError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
     std::fs::write(&manifest_path, json)?;
 
-    Ok(report)
+    Ok(())
 }
 
 /// Run all 4 emitters on a parsed Rust file and collect results.
@@ -460,6 +515,7 @@ mod tests {
         let tmp = make_temp_dir("write");
 
         let report = write_dsl_files(&tmp, "TESTPROG", "test.rs", &files).unwrap();
+        write_workspace_manifest(&tmp, &[report.clone()], &[]).unwrap();
 
         // Verify files exist on disk
         let dsl_dir = tmp.join("dsl");
@@ -506,14 +562,16 @@ mod tests {
         let files = emit_all_dsl(&ctx);
         let tmp = make_temp_dir("manifest");
 
-        write_dsl_files(&tmp, "TESTPROG", "test.rs", &files).unwrap();
+        let report = write_dsl_files(&tmp, "TESTPROG", "test.rs", &files).unwrap();
+        write_workspace_manifest(&tmp, &[report], &[]).unwrap();
 
         let manifest_path = tmp.join("dsl/dsl_manifest.json");
         let json = std::fs::read_to_string(&manifest_path).unwrap();
-        let parsed: DslWriteReport = serde_json::from_str(&json).unwrap();
+        let parsed: WorkspaceManifest = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.program_name, "TESTPROG");
-        assert_eq!(parsed.source_file, "test.rs");
+        assert_eq!(parsed.total_programs, 1);
+        assert_eq!(parsed.programs[0].program_name, "TESTPROG");
+        assert_eq!(parsed.programs[0].source_file, "test.rs");
         assert!(parsed.total_files > 0);
 
         let _ = std::fs::remove_dir_all(&tmp);

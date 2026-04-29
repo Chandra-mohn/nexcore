@@ -468,9 +468,16 @@ pub fn emit_dsl_for_workspace(
     let rs_files = collect_rs_files(&src_dir, None, None);
 
     let mut reports = Vec::new();
+    let mut errors = Vec::new();
 
     for rs_path in &rs_files {
-        let source_text = std::fs::read_to_string(rs_path)?;
+        let source_text = match std::fs::read_to_string(rs_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(path = %rs_path.display(), error = %e, "Cannot read Rust file");
+                continue;
+            }
+        };
         let syn_file = match syn::parse_str::<syn::File>(&source_text) {
             Ok(f) => f,
             Err(e) => {
@@ -496,13 +503,27 @@ pub fn emit_dsl_for_workspace(
         };
 
         // Route through emit_dsl_routed for proper mode dispatch
-        let dsl_files = emit_dsl_for_program(
+        let dsl_files = match emit_dsl_for_program(
             config,
             &legacy_ctx,
             &program_name,
             #[cfg(feature = "direct-emit")]
             &cobol_source_map,
-        )?;
+        ) {
+            Ok(files) => files,
+            Err(e) => {
+                tracing::warn!(
+                    program = %program_name,
+                    error = %e,
+                    "DSL emission failed, skipping program"
+                );
+                errors.push(dsl::writer::ProgramError {
+                    program: program_name,
+                    error: e.to_string(),
+                });
+                continue;
+            }
+        };
 
         if dsl_files.is_empty() {
             continue;
@@ -514,13 +535,36 @@ pub fn emit_dsl_for_workspace(
             .to_string_lossy()
             .to_string();
 
-        let report = dsl::writer::write_dsl_files(
+        match dsl::writer::write_dsl_files(
             output_dir,
             &program_name,
             &rel_path,
             &dsl_files,
-        )?;
-        reports.push(report);
+        ) {
+            Ok(report) => reports.push(report),
+            Err(e) => {
+                tracing::warn!(
+                    program = %program_name,
+                    error = %e,
+                    "DSL file write failed, skipping program"
+                );
+                errors.push(dsl::writer::ProgramError {
+                    program: program_name,
+                    error: e.to_string(),
+                });
+            }
+        }
+    }
+
+    // Write aggregated workspace manifest once, after all programs
+    dsl::writer::write_workspace_manifest(output_dir, &reports, &errors)?;
+
+    if !errors.is_empty() {
+        tracing::warn!(
+            succeeded = reports.len(),
+            failed = errors.len(),
+            "DSL emission completed with errors"
+        );
     }
 
     Ok(reports)
@@ -1411,6 +1455,108 @@ mod tests {
         let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
         assert_eq!(reports.len(), 1, "Should work with filename fallback");
         assert_eq!(reports[0].program_name, "TESTDSL");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Second program's transpiled Rust (different program name).
+    const TEST_TRANSPILED_RUST_B: &str = r#"
+        #![allow(unused_imports, unused_variables, non_snake_case)]
+        use cobol_runtime::prelude::*;
+
+        #[cobol(program = "PROGB")]
+        pub struct WorkingStorage {
+            #[cobol(level = 1, pic = "X(20)")]
+            pub ws_name: PicX,
+            #[cobol(level = 1, pic = "9(5)")]
+            pub ws_count: PackedDecimal,
+        }
+
+        #[cobol(section = "MAIN-SECTION")]
+        fn main_para(ws: &mut WorkingStorage, ctx: &mut ProgramContext) {}
+    "#;
+
+    #[test]
+    fn e2e_multi_program_workspace_aggregated_manifest() {
+        let base = std::env::temp_dir().join(format!(
+            "cobol2rust_dsl_e2e_multi_{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let ws_dir = base.join("workspace");
+        std::fs::create_dir_all(ws_dir.join("src")).unwrap();
+
+        // Two valid programs
+        std::fs::write(ws_dir.join("src/testdsl.rs"), TEST_TRANSPILED_RUST).unwrap();
+        std::fs::write(ws_dir.join("src/progb.rs"), TEST_TRANSPILED_RUST_B).unwrap();
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Legacy,
+            ..RustifyConfig::default()
+        };
+
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 2, "Should have 2 program reports");
+
+        // Verify aggregated manifest
+        let manifest_path = ws_dir.join("dsl/dsl_manifest.json");
+        assert!(manifest_path.exists(), "Workspace manifest should exist");
+
+        let json = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest: dsl::writer::WorkspaceManifest =
+            serde_json::from_str(&json).unwrap();
+
+        assert_eq!(manifest.total_programs, 2);
+        assert!(manifest.total_files > 0);
+        assert!(manifest.errors.is_empty());
+
+        let names: Vec<&str> = manifest.programs.iter()
+            .map(|p| p.program_name.as_str())
+            .collect();
+        assert!(names.contains(&"TESTDSL"), "Should contain TESTDSL");
+        assert!(names.contains(&"PROGB"), "Should contain PROGB");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn e2e_broken_file_skipped_others_succeed() {
+        let base = std::env::temp_dir().join(format!(
+            "cobol2rust_dsl_e2e_skip_{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let ws_dir = base.join("workspace");
+        std::fs::create_dir_all(ws_dir.join("src")).unwrap();
+
+        // One valid program
+        std::fs::write(ws_dir.join("src/testdsl.rs"), TEST_TRANSPILED_RUST).unwrap();
+        // One broken file (invalid Rust, but has .rs extension)
+        std::fs::write(ws_dir.join("src/broken.rs"), "this is not valid rust {{{{").unwrap();
+        // One more valid program
+        std::fs::write(ws_dir.join("src/progb.rs"), TEST_TRANSPILED_RUST_B).unwrap();
+
+        let config = RustifyConfig {
+            source_dir: ws_dir.clone(),
+            emit_dsl: true,
+            emit_mode: config::EmitMode::Legacy,
+            ..RustifyConfig::default()
+        };
+
+        // Should NOT error -- broken file is skipped
+        let reports = emit_dsl_for_workspace(&config, &ws_dir).unwrap();
+        assert_eq!(reports.len(), 2, "Should have 2 reports (broken file skipped)");
+
+        // Manifest should still be written with both successful programs
+        let manifest_path = ws_dir.join("dsl/dsl_manifest.json");
+        let json = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest: dsl::writer::WorkspaceManifest =
+            serde_json::from_str(&json).unwrap();
+
+        assert_eq!(manifest.total_programs, 2);
+        assert!(manifest.errors.is_empty(), "Parse failures are silent skips, not errors");
 
         let _ = std::fs::remove_dir_all(&base);
     }

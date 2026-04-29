@@ -529,7 +529,7 @@ mod tests {
         let expr = syn::parse_str::<syn::Expr>(code).unwrap();
         let if_expr = match &expr {
             syn::Expr::If(i) => i,
-            _ => panic!("Expected if expression"),
+            other => panic!("Expected Expr::If, got {:?}", std::mem::discriminant(other)),
         };
 
         let branches = extract_if_chain(if_expr);
@@ -569,7 +569,7 @@ mod tests {
         let expr = syn::parse_str::<syn::Expr>(code).unwrap();
         let if_expr = match &expr {
             syn::Expr::If(i) => i,
-            _ => panic!("Expected if expression"),
+            other => panic!("Expected Expr::If, got {:?}", std::mem::discriminant(other)),
         };
 
         let branches = extract_if_chain(if_expr);
